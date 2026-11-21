@@ -997,6 +997,16 @@ MODELS = {
         },
         "optional": {},
     },
+    "inkling-2-mini": {
+        "repo": "danyalmalik/Inkling-2-Mini-ONNX-WebGPU",
+        "revision": "a0c8c9a7570b72a79670bb74ea283c5a913efa3b",
+        "files": {
+            "tokenizer.json": (26178678, "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6"),
+            "tokenizer_config.json": (13235, "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636"),
+            "chat_template.jinja": (6868, "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc"),
+        },
+        "optional": {},
+    },
     "nemotron-3.5-bolt-e4b": {
         "repo": "danyalmalik/NVIDIA-Nemotron-3.5-Bolt-E4B-ONNX-WebGPU",
         "revision": "8c8bbc52faa8d86d1c1c02650728053ee5170b73",

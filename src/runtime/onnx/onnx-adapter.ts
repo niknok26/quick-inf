@@ -34,7 +34,7 @@ import type { ModelArtifact, ModelSpec, OnnxArtifact } from '../../catalogue/mod
 import { getGpuAdapter, getGpuDevice } from '../../device/gpu';
 import { BpeTokenizer } from '../../tokenizer/bpe-tokenizer';
 import { createPromptFormatter, type PromptFormatOptions, type PromptFormatter } from '../../tokenizer/prompt-format';
-import { Gemma4Stream, HarmonyStream, MuseGlimmerStream } from '../../tokenizer/harmony';
+import { Gemma4Stream, HarmonyStream, InklingStream, MuseGlimmerStream } from '../../tokenizer/harmony';
 import { StreamingDecoder } from '../../tokenizer/streaming-decoder';
 import { fitTurns } from '../context';
 import {
@@ -561,7 +561,9 @@ export class OnnxWebGpuAdapter implements RuntimeAdapter {
             ? new MuseGlimmerStream(tokenizer)
             : kind === 'gemma4'
               ? new Gemma4Stream(tokenizer)
-              : new StreamingDecoder(tokenizer);
+              : kind === 'inkling'
+                ? new InklingStream(tokenizer)
+                : new StreamingDecoder(tokenizer);
       const generated: number[] = [];
       let text = '';
       let finishReason: FinishReason = 'length';
@@ -574,12 +576,14 @@ export class OnnxWebGpuAdapter implements RuntimeAdapter {
       const turnsEnd = promptIds.length - formatter.generationLength;
       let prefilled: { logits: Float32Array<ArrayBuffer>; cache: KvCache; cancelled: boolean; taps?: { tensor: Tensor; start: number } };
       if (loaded.graph.recurrent && turnsEnd > reusedTokens) {
-        prefilled = await this.prefill(promptIds.slice(reusedTokens, turnsEnd), cache, reusedTokens, false);
+        // Without a generation prompt (Inkling 2 writes its reply's header itself), this pass gives the logits.
+        const promptEnd = turnsEnd < promptIds.length;
+        prefilled = await this.prefill(promptIds.slice(reusedTokens, turnsEnd), cache, reusedTokens, !promptEnd);
         cache = prefilled.cache;
         if (!prefilled.cancelled) {
           this.dropCheckpoint();
           this.checkpoint = { ids: promptIds.slice(0, turnsEnd), cache: this.cloneCache(cache) };
-          prefilled = await this.prefill(promptIds.slice(turnsEnd), cache, turnsEnd);
+          if (promptEnd) prefilled = await this.prefill(promptIds.slice(turnsEnd), cache, turnsEnd);
         }
       } else {
         prefilled = await this.prefill(promptIds.slice(reusedTokens), cache, reusedTokens);
@@ -1734,7 +1738,10 @@ function readGraphShape(session: ModelSession, embeddings: InferenceSession | nu
   const headDim = first.emptyDims[3]!;
   const { kvHeads: expectedHeads, headDim: expectedDim } = model.architecture;
   const layers = model.architecture.cacheLayers ?? model.architecture.layers;
-  if (kv.length / 2 + linear !== layers || kvHeads !== expectedHeads || headDim !== expectedDim) {
+  // Convolution states are layers of their own (linear attention), or one per attention layer beside its KV cache
+  // (Inkling 2's key, value and output convolutions).
+  const counted = kv.length / 2 + linear === layers || (linear === kv.length / 2 && kv.length / 2 === layers);
+  if (!counted || kvHeads !== expectedHeads || headDim !== expectedDim) {
     throw new Error(
       `expected ${layers} layers × ${expectedHeads} KV heads × ${expectedDim}, found ${kv.length / 2} + ${linear} × ${kvHeads} × ${headDim}`,
     );

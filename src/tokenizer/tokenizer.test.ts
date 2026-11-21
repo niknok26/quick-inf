@@ -117,6 +117,7 @@ import fx_glm_4_7_flash from './__fixtures__/glm-4.7-flash-tokenizer.json';
 import fx_flint from './__fixtures__/flint-tokenizer.json';
 import fx_nanbeige43_33b from './__fixtures__/nanbeige4.3-33b-tokenizer.json';
 import fx_muse_glimmer_30b from './__fixtures__/muse-glimmer-30b-tokenizer.json';
+import fx_inkling_2_mini from './__fixtures__/inkling-2-mini-tokenizer.json';
 import fx_gemma_3_12b from './__fixtures__/gemma-3-12b-tokenizer.json';
 import fx_nemotron_3_nano from './__fixtures__/nemotron-3-nano-tokenizer.json';
 // end own exports imports
@@ -188,6 +189,7 @@ const SUITES = [
   { modelId: 'flint', fixtures: fx_flint },
   { modelId: 'nanbeige4.3-33b', fixtures: fx_nanbeige43_33b },
   { modelId: 'muse-glimmer-30b', fixtures: fx_muse_glimmer_30b },
+  { modelId: 'inkling-2-mini', fixtures: fx_inkling_2_mini },
   { modelId: 'gemma-3-12b-it', fixtures: fx_gemma_3_12b },
   { modelId: 'nemotron-3-nano-30b-a3b', fixtures: fx_nemotron_3_nano },
   // end own exports suites

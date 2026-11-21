@@ -64,6 +64,12 @@
 //   flint   <|system|>{system}<|user|>{content}<|assistant|>{content} ... <|assistant|> (Flint): no start token,
 //           newlines or end tokens (the next turn's tag ends a reply); past replies keep only their answer; the model
 //           decides whether a new reply starts with <think>.
+//   inkling <|message_system|><|content_text|>{system}<|end_message|>, then
+//           <|message_system|><|content_text|>Thinking effort level: {0 or 0.9}<|end_message|> before the first other
+//           turn, <|message_user|><|content_text|>{content}<|end_message|>
+//           <|message_model|><|content_text|>{content}<|end_message|><|content_model_end_sampling|> ... (Inkling 2):
+//           no generation prompt (the model writes <|message_model|>); thinking comes as its own message
+//           (<|content_thinking|>): see InklingStream. Thinking off is effort 0.
 
 import type { BpeTokenizer } from './bpe-tokenizer';
 
@@ -92,7 +98,8 @@ export type PromptFormatKind =
   | 'muse-glimmer'
   | 'glm'
   | 'nemotron'
-  | 'flint';
+  | 'flint'
+  | 'inkling';
 
 export interface PromptFormatOptions {
   /** Inserted when the first turn is not a system turn, as the model's template does (chatml). */
@@ -364,6 +371,21 @@ const SPECS: Record<PromptFormatKind, (o: PromptFormatOptions) => FormatSpec> = 
           : message(t.role === 'user' ? 'user' : 'assistant to=user', t.content),
       generation: [{ special: '<|start|>' }, 'assistant'],
       endOfTurn: '<|eot|>',
+    };
+  },
+  inkling: (o) => {
+    const message = (role: string, content: string): Part[] => [{ special: role }, { special: '<|content_text|>' }, content, { special: '<|end_message|>' }];
+    const effort = message('<|message_system|>', `Thinking effort level: ${o.disableThinking ? '0' : '0.9'}`);
+    return {
+      start: (implicit) => (implicit ? [...effort] : []),
+      turn: (t) =>
+        t.role === 'system'
+          ? [...message('<|message_system|>', t.content), ...effort]
+          : t.role === 'user'
+            ? message('<|message_user|>', t.content)
+            : [...message('<|message_model|>', t.content), { special: '<|content_model_end_sampling|>' }],
+      generation: [],
+      endOfTurn: '<|content_model_end_sampling|>',
     };
   },
   gemma: () => ({

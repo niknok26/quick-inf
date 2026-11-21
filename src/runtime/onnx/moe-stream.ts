@@ -111,8 +111,10 @@ export class StreamedSession {
       return { experts: layer.experts, k: intAttributeOf(layer, 'k', 1), normalize: intAttributeOf(layer, 'normalize_routing_weights', 0) === 1 };
     });
     const largest = split.layers.reduce((a, l) => (expertBytes(l) > expertBytes(a) ? l : a));
-    this.slots = new SlotBuffers(options.device, largest, options.maxSlots);
-    this.cache = new ExpertCache(options.device, options.sources, Math.max(options.maxSlots + 1, Math.floor(options.cacheBytes / expertBytes(largest))));
+    this.slots = new SlotBuffers(options.device, split.layers, options.maxSlots);
+    // A group never needs more than maxSlots experts at once: room for that many of the largest, at least.
+    const budget = Math.max((options.maxSlots + 1) * expertBytes(largest), options.cacheBytes);
+    this.cache = new ExpertCache(options.device, options.sources, budget, Math.floor(budget / expertBytes(largest)));
     this.stats = this.cache.stats;
   }
 
@@ -256,12 +258,18 @@ class ExpertCache {
   readonly stats: StreamStats;
   private readonly entries = new Map<string, { buffer: GPUBuffer; offsets: number[] }>();
   private readonly pinned = new Set<string>();
-  private readonly spare: GPUBuffer[] = [];
   private staging = new Uint8Array(0);
+  /** Bytes of the cached experts' buffers. */
+  private used = 0;
 
+  /**
+   * `budget`: bytes the cached experts may take (counted in bytes, as layers' experts can differ in size: Inkling 2's
+   * MXFP8 ones are about twice its NVFP4 ones). `capacity` (in the largest experts) is for reports.
+   */
   constructor(
     private readonly device: GPUDevice,
     private readonly sources: Record<string, ByteSource>,
+    private readonly budget: number,
     capacity: number,
   ) {
     this.stats = { hits: 0, misses: 0, readBytes: 0, readMs: 0, capacity, segmentMs: 0, routerMs: 0, fillMs: 0, expertMs: 0 };
@@ -269,7 +277,10 @@ class ExpertCache {
 
   /** Experts of a group stay put until `unpin` (a group never needs more than the capacity). */
   get(layerIndex: number, layer: MoeLayer, expert: number): { buffer: GPUBuffer; offsets: number[] } {
-    const key = `${layerIndex}:${expert}`;
+    // Keyed by where the expert's bytes are, so layers sharing their experts (Inkling 2's looped layers, which run
+    // three times) share their cached copies too.
+    const first = layer.tensors[0];
+    const key = first?.location ? `${first.location}@${first.offset}:${expert}` : `${layerIndex}:${expert}`;
     // Development: the order experts are asked for, to study cache policies (bench.html with stream).
     if (import.meta.env.DEV) (globalThis as { __quickInfStreamTrace?: string[] }).__quickInfStreamTrace?.push(key);
     let entry = this.entries.get(key);
@@ -282,20 +293,19 @@ class ExpertCache {
     }
     this.stats.misses++;
     const size = expertBytes(layer);
-    let buffer = this.spare.pop() ?? null;
-    if (!buffer && this.entries.size >= this.stats.capacity) {
-      for (const [k, e] of this.entries) {
-        if (this.pinned.has(k)) continue;
-        this.entries.delete(k);
-        buffer = e.buffer;
-        break;
-      }
-    }
-    if (buffer && buffer.size < size) {
-      buffer.destroy();
-      buffer = null;
+    // The least recently used experts make room (not the current group's): a freed buffer this expert fits in, without
+    // wasting much of it, is used again.
+    let buffer: GPUBuffer | null = null;
+    for (const [k, e] of this.entries) {
+      if (this.used + size <= this.budget) break;
+      if (this.pinned.has(k)) continue;
+      this.entries.delete(k);
+      this.used -= e.buffer.size;
+      if (!buffer && e.buffer.size >= size && e.buffer.size <= size * 1.25) buffer = e.buffer;
+      else e.buffer.destroy();
     }
     buffer ??= this.device.createBuffer({ size, usage: BUFFER_STORAGE | BUFFER_COPY_SRC | BUFFER_COPY_DST });
+    this.used += buffer.size;
     const start = performance.now();
     const offsets: number[] = [];
     let offset = 0;
@@ -330,8 +340,8 @@ class ExpertCache {
 
   destroy(): void {
     for (const e of this.entries.values()) e.buffer.destroy();
-    for (const b of this.spare) b.destroy();
     this.entries.clear();
+    this.used = 0;
   }
 }
 
@@ -341,11 +351,14 @@ class SlotBuffers {
 
   constructor(
     private readonly device: GPUDevice,
-    layer: MoeLayer,
+    layers: MoeLayer[],
     private readonly maxSlots: number,
   ) {
-    this.buffers = layer.tensors.map((t) =>
-      device.createBuffer({ size: Math.ceil((t.length / layer.experts) * Math.max(maxSlots, 2)) + 4, usage: BUFFER_STORAGE | BUFFER_COPY_DST }),
+    // Each tensor's buffer fits that tensor's largest expert in any layer: layers in different formats differ per
+    // tensor, not only in total (Inkling 2's NVFP4 experts have smaller weights but larger scales than its MXFP8 ones).
+    const largest = (j: number) => Math.max(...layers.map((l) => (l.tensors[j]?.length ?? 0) / l.experts));
+    this.buffers = layers[0]!.tensors.map((_, j) =>
+      device.createBuffer({ size: Math.ceil(largest(j) * Math.max(maxSlots, 2)) + 4, usage: BUFFER_STORAGE | BUFFER_COPY_DST }),
     );
   }
 

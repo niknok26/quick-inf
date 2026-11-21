@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BpeTokenizer } from './bpe-tokenizer';
-import { Gemma4Stream, MuseGlimmerStream } from './harmony';
+import { Gemma4Stream, InklingStream, MuseGlimmerStream } from './harmony';
 
 // A tokenizer with one token per piece of text and Muse Glimmer's control tokens.
 const SPECIAL = ['<|start|>', '<|message|>', '<|eom|>', '<|eot|>'];
@@ -54,5 +54,29 @@ describe('Gemma4Stream', () => {
   it('leaves a reply without a channel as it is, and closes thinking a reply ends in', () => {
     expect(runGemma('Paris', ' is the capital')).toBe('Paris is the capital');
     expect(runGemma('<|channel>', 'thought', '\n', 'Let me think')).toBe('<think>Let me think</think>');
+  });
+});
+
+describe('InklingStream', () => {
+  const special = ['<|message_model|>', '<|content_thinking|>', '<|content_text|>', '<|end_message|>'];
+  const words = [...special, 'Let me think', '.', 'Paris', ' is the capital'];
+  const inkling = {
+    specialTokenId: (text: string) => special.indexOf(text),
+    decode: (ids: number[], options?: { skipSpecialTokens?: boolean }) =>
+      ids.map((id) => (options?.skipSpecialTokens && id < special.length ? '' : words[id])).join(''),
+  } as unknown as BpeTokenizer;
+  const runInkling = (...texts: string[]) => {
+    const stream = new InklingStream(inkling);
+    return texts.map((t) => stream.push(words.indexOf(t))).join('') + stream.flush();
+  };
+
+  it('turns the thinking message into thinking and the text message into the answer', () => {
+    const reply = ['<|message_model|>', '<|content_thinking|>', 'Let me think', '.', '<|end_message|>', '<|message_model|>', '<|content_text|>', 'Paris', ' is the capital', '<|end_message|>'];
+    expect(runInkling(...reply)).toBe('<think>Let me think.</think>Paris is the capital');
+  });
+
+  it('answers straight away without a thinking message, and closes thinking a reply ends in', () => {
+    expect(runInkling('<|message_model|>', '<|content_text|>', 'Paris', '<|end_message|>')).toBe('Paris');
+    expect(runInkling('<|message_model|>', '<|content_thinking|>', 'Let me think')).toBe('<think>Let me think</think>');
   });
 });

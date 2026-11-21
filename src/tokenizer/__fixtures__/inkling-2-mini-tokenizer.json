@@ -1,0 +1,927 @@
+{
+ "source": {
+  "repo": "danyalmalik/Inkling-2-Mini-ONNX-WebGPU",
+  "revision": "a0c8c9a7570b72a79670bb74ea283c5a913efa3b",
+  "tokenizers": "0.23.3",
+  "path": "tokenizer.json"
+ },
+ "templateKwargs": {
+  "reasoning_effort": 0.0
+ },
+ "text": [
+  {
+   "text": "",
+   "ids": []
+  },
+  {
+   "text": "Hello, world!",
+   "ids": [
+    32269,
+    11,
+    150770,
+    0
+   ]
+  },
+  {
+   "text": "hello world",
+   "ids": [
+    32205,
+    150770
+   ]
+  },
+  {
+   "text": "  leading and trailing spaces  ",
+   "ids": [
+    220,
+    154384,
+    149880,
+    162610,
+    279,
+    156465,
+    149859
+   ]
+  },
+  {
+   "text": "multiple   spaces\tand\ttabs\n\nand newlines\r\n",
+   "ids": [
+    71764,
+    149859,
+    156465,
+    197,
+    276,
+    197,
+    4338,
+    82,
+    68014,
+    276,
+    150046,
+    69645,
+    68247
+   ]
+  },
+  {
+   "text": "Numbers: 0 7 42 1234567890 3.14159 -12,345",
+   "ids": [
+    98677,
+    25,
+    220,
+    15,
+    220,
+    22,
+    220,
+    68872,
+    220,
+    70904,
+    81554,
+    91927,
+    15,
+    220,
+    18,
+    13,
+    73388,
+    69022,
+    196973,
+    68040,
+    11,
+    81999
+   ]
+  },
+  {
+   "text": "I'm sure you're right, they'll see it's done; we've I'd",
+   "ids": [
+    40,
+    6,
+    76,
+    151456,
+    149941,
+    6,
+    261,
+    150349,
+    11,
+    150051,
+    6,
+    359,
+    150294,
+    149921,
+    6,
+    82,
+    151368,
+    26,
+    149961,
+    6,
+    290,
+    149904,
+    6,
+    67
+   ]
+  },
+  {
+   "text": "CAPS and MiXeD case WORDS; I'M SURE IT'S FINE",
+   "ids": [
+    146328,
+    50,
+    149880,
+    153192,
+    55,
+    68,
+    35,
+    150355,
+    199464,
+    146220,
+    26,
+    149904,
+    6,
+    44,
+    198340,
+    145868,
+    198333,
+    6,
+    50,
+    149985,
+    146123
+   ]
+  },
+  {
+   "text": "def add(a, b):\n    return a + b  # comment\n",
+   "ids": [
+    1719,
+    150563,
+    7,
+    64,
+    11,
+    149963,
+    8,
+    25,
+    198,
+    149862,
+    150583,
+    149878,
+    196986,
+    149963,
+    220,
+    196994,
+    151522,
+    198
+   ]
+  },
+  {
+   "text": "const x = { key: [1, 2, 3] }; // JS",
+   "ids": [
+    1374,
+    149924,
+    196977,
+    196983,
+    150452,
+    25,
+    196989,
+    16,
+    11,
+    220,
+    17,
+    11,
+    220,
+    18,
+    60,
+    196991,
+    26,
+    197034,
+    198607
+   ]
+  },
+  {
+   "text": "Emoji: 😀 🚀 👩‍💻 🇬🇧",
+   "ids": [
+    45805,
+    25,
+    220,
+    110689,
+    220,
+    108185,
+    220,
+    74269,
+    70363,
+    111037,
+    220,
+    73496,
+    74306
+   ]
+  },
+  {
+   "text": "Accents: café naïve résumé Ångström",
+   "ids": [
+    46006,
+    82,
+    25,
+    162389,
+    149946,
+    5169,
+    290,
+    150182,
+    118188,
+    159224,
+    3068,
+    110559
+   ]
+  },
+  {
+   "text": "Decomposed accents: café Å",
+   "ids": [
+    852,
+    98953,
+    176593,
+    82,
+    25,
+    220,
+    34681,
+    69195,
+    159224
+   ]
+  },
+  {
+   "text": "中文分词测试，日本語のテキスト、한국어 텍스트",
+   "ids": [
+    114903,
+    13095,
+    6758,
+    116305,
+    6633,
+    90626,
+    22912,
+    6084,
+    2804,
+    2064,
+    3527,
+    3529,
+    6433,
+    91422,
+    27040,
+    220,
+    27239,
+    86274
+   ]
+  },
+  {
+   "text": "Arabic: مرحبا بالعالم and Hebrew: שלום",
+   "ids": [
+    30967,
+    274,
+    25,
+    163115,
+    150701,
+    72897,
+    149880,
+    220,
+    35068,
+    25,
+    220,
+    128122
+   ]
+  },
+  {
+   "text": "Math: ∑ x² ≤ ∞ → ∫ f(x) dx",
+   "ids": [
+    3321,
+    25,
+    190207,
+    149924,
+    5142,
+    154049,
+    163900,
+    151239,
+    181545,
+    149983,
+    7,
+    87,
+    8,
+    154637
+   ]
+  },
+  {
+   "text": "Special-looking text <|im_start|> and <|im_end|> <think> should be plain text",
+   "ids": [
+    37024,
+    12,
+    74467,
+    150311,
+    196982,
+    91,
+    315,
+    62,
+    1424,
+    91,
+    29,
+    149880,
+    196982,
+    91,
+    315,
+    62,
+    406,
+    91,
+    29,
+    196982,
+    2090,
+    29,
+    150201,
+    149895,
+    163493,
+    150311
+   ]
+  },
+  {
+   "text": "URL https://example.com/path?q=1&r=two#frag",
+   "ids": [
+    145912,
+    150491,
+    25,
+    145055,
+    1805,
+    13,
+    376,
+    14,
+    1448,
+    30,
+    80,
+    28,
+    16,
+    5,
+    81,
+    28,
+    1286,
+    2,
+    31193
+   ]
+  },
+  {
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ids": [
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642,
+    3642
+   ]
+  },
+  {
+   "text": "Zero​width and non breaking",
+   "ids": [
+    33558,
+    68619,
+    32707,
+    149880,
+    150052,
+    1377,
+    105763
+   ]
+  },
+  {
+   "text": "\n",
+   "ids": [
+    198
+   ]
+  },
+  {
+   "text": " ",
+   "ids": [
+    220
+   ]
+  },
+  {
+   "text": "end with space ",
+   "ids": [
+    406,
+    149899,
+    150785,
+    220
+   ]
+  },
+  {
+   "text": "trailing newlines\n\n\n",
+   "ids": [
+    31229,
+    279,
+    150046,
+    69645,
+    68019
+   ]
+  }
+ ],
+ "chat": [
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the capital of France?"
+    }
+   ],
+   "rendered": "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>What is the capital of France?<|end_message|>",
+   "ids": [
+    200002,
+    200004,
+    34182,
+    279,
+    154554,
+    150628,
+    25,
+    220,
+    15,
+    200010,
+    200000,
+    200004,
+    1775,
+    149884,
+    149876,
+    151451,
+    149879,
+    151194,
+    30,
+    200010
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a terse assistant."
+    },
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "rendered": "<|message_system|><|content_text|>You are a terse assistant.<|end_message|><|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>Say hi.<|end_message|>",
+   "ids": [
+    200002,
+    200004,
+    1735,
+    149914,
+    149878,
+    172044,
+    171159,
+    13,
+    200010,
+    200002,
+    200004,
+    34182,
+    279,
+    154554,
+    150628,
+    25,
+    220,
+    15,
+    200010,
+    200000,
+    200004,
+    35240,
+    151003,
+    13,
+    200010
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Write a haiku about rain."
+    },
+    {
+     "role": "assistant",
+     "content": "Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky"
+    },
+    {
+     "role": "user",
+     "content": "Now one about snow."
+    }
+   ],
+   "rendered": "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>Write a haiku about rain.<|end_message|><|message_model|><|content_text|>Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky<|end_message|><|content_model_end_sampling|><|message_user|><|content_text|>Now one about snow.<|end_message|>",
+   "ids": [
+    200002,
+    200004,
+    34182,
+    279,
+    154554,
+    150628,
+    25,
+    220,
+    15,
+    200010,
+    200000,
+    200004,
+    3711,
+    149878,
+    220,
+    57833,
+    150081,
+    154005,
+    13,
+    200010,
+    200001,
+    200004,
+    4037,
+    154005,
+    149894,
+    149876,
+    170898,
+    198,
+    33122,
+    82,
+    149882,
+    149876,
+    195532,
+    157269,
+    198,
+    43905,
+    2567,
+    153831,
+    149876,
+    158808,
+    200010,
+    200006,
+    200000,
+    200004,
+    3119,
+    150011,
+    150081,
+    159017,
+    13,
+    200010
+   ]
+  }
+ ],
+ "decode": [
+  {
+   "ids": [
+    200006,
+    1268,
+    198,
+    200006
+   ],
+   "text": "<|content_model_end_sampling|>system\n<|content_model_end_sampling|>",
+   "textSkipSpecial": "system\n"
+  },
+  {
+   "ids": [
+    32269,
+    11,
+    150770,
+    0
+   ],
+   "text": "Hello, world!",
+   "textSkipSpecial": "Hello, world!"
+  },
+  {
+   "ids": [
+    45805,
+    25,
+    220,
+    110689,
+    220,
+    108185,
+    220,
+    74269,
+    70363,
+    111037,
+    220,
+    73496,
+    74306
+   ],
+   "text": "Emoji: 😀 🚀 👩‍💻 🇬🇧",
+   "textSkipSpecial": "Emoji: 😀 🚀 👩‍💻 🇬🇧"
+  },
+  {
+   "ids": [
+    114903,
+    13095,
+    6758,
+    116305,
+    6633,
+    90626,
+    22912,
+    6084,
+    2804,
+    2064,
+    3527,
+    3529,
+    6433,
+    91422,
+    27040,
+    220,
+    27239,
+    86274
+   ],
+   "text": "中文分词测试，日本語のテキスト、한국어 텍스트",
+   "textSkipSpecial": "中文分词测试，日本語のテキスト、한국어 텍스트"
+  }
+ ],
+ "chatThinking": {
+  "on": [
+   {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the capital of France?"
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>What is the capital of France?<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     13,
+     24,
+     200010,
+     200000,
+     200004,
+     1775,
+     149884,
+     149876,
+     151451,
+     149879,
+     151194,
+     30,
+     200010
+    ]
+   },
+   {
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are a terse assistant."
+     },
+     {
+      "role": "user",
+      "content": "Say hi."
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>You are a terse assistant.<|end_message|><|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>Say hi.<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     1735,
+     149914,
+     149878,
+     172044,
+     171159,
+     13,
+     200010,
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     13,
+     24,
+     200010,
+     200000,
+     200004,
+     35240,
+     151003,
+     13,
+     200010
+    ]
+   },
+   {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Write a haiku about rain."
+     },
+     {
+      "role": "assistant",
+      "content": "Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky"
+     },
+     {
+      "role": "user",
+      "content": "Now one about snow."
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>Write a haiku about rain.<|end_message|><|message_model|><|content_text|>Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky<|end_message|><|content_model_end_sampling|><|message_user|><|content_text|>Now one about snow.<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     13,
+     24,
+     200010,
+     200000,
+     200004,
+     3711,
+     149878,
+     220,
+     57833,
+     150081,
+     154005,
+     13,
+     200010,
+     200001,
+     200004,
+     4037,
+     154005,
+     149894,
+     149876,
+     170898,
+     198,
+     33122,
+     82,
+     149882,
+     149876,
+     195532,
+     157269,
+     198,
+     43905,
+     2567,
+     153831,
+     149876,
+     158808,
+     200010,
+     200006,
+     200000,
+     200004,
+     3119,
+     150011,
+     150081,
+     159017,
+     13,
+     200010
+    ]
+   }
+  ],
+  "off": [
+   {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the capital of France?"
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>What is the capital of France?<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     200010,
+     200000,
+     200004,
+     1775,
+     149884,
+     149876,
+     151451,
+     149879,
+     151194,
+     30,
+     200010
+    ]
+   },
+   {
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are a terse assistant."
+     },
+     {
+      "role": "user",
+      "content": "Say hi."
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>You are a terse assistant.<|end_message|><|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>Say hi.<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     1735,
+     149914,
+     149878,
+     172044,
+     171159,
+     13,
+     200010,
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     200010,
+     200000,
+     200004,
+     35240,
+     151003,
+     13,
+     200010
+    ]
+   },
+   {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Write a haiku about rain."
+     },
+     {
+      "role": "assistant",
+      "content": "Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky"
+     },
+     {
+      "role": "user",
+      "content": "Now one about snow."
+     }
+    ],
+    "rendered": "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>Write a haiku about rain.<|end_message|><|message_model|><|content_text|>Soft rain on the roof\nwhispers to the sleeping town\npuddles hold the sky<|end_message|><|content_model_end_sampling|><|message_user|><|content_text|>Now one about snow.<|end_message|>",
+    "ids": [
+     200002,
+     200004,
+     34182,
+     279,
+     154554,
+     150628,
+     25,
+     220,
+     15,
+     200010,
+     200000,
+     200004,
+     3711,
+     149878,
+     220,
+     57833,
+     150081,
+     154005,
+     13,
+     200010,
+     200001,
+     200004,
+     4037,
+     154005,
+     149894,
+     149876,
+     170898,
+     198,
+     33122,
+     82,
+     149882,
+     149876,
+     195532,
+     157269,
+     198,
+     43905,
+     2567,
+     153831,
+     149876,
+     158808,
+     200010,
+     200006,
+     200000,
+     200004,
+     3119,
+     150011,
+     150081,
+     159017,
+     13,
+     200010
+    ]
+   }
+  ]
+ }
+}

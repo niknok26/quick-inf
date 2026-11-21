@@ -124,7 +124,8 @@ export interface ModelArchitecture {
     | 'glm4-moe'
     | 'nemotron-h'
     | 'flint'
-    | 'muse-glimmer';
+    | 'muse-glimmer'
+    | 'inkling2';
   /** Total parameters, including embeddings (used for compute estimates). */
   parameterCount: number;
   /** Mixture-of-experts models: the parameters each token uses. */
@@ -4024,6 +4025,65 @@ export const MUSE_GLIMMER_30B: ModelSpec = {
   ],
 };
 
+export const INKLING_2_MINI: ModelSpec = {
+  id: 'inkling-2-mini',
+  name: 'Inkling 2 Mini',
+  publisher: 'Thinking Machines Lab',
+  parameters: '26B (3.4B active)',
+  license: 'Apache 2.0',
+  task: 'chat',
+  source: { host: 'huggingface', repo: `${OWN_EXPORTS}/Inkling-2-Mini-ONNX-WebGPU`, revision: 'a0c8c9a7570b72a79670bb74ea283c5a913efa3b' },
+  // Our own exporter (tools/export/export_inkling.py, checked by check_inkling.py against transformers' code) from the
+  // official checkpoint: its NVFP4 and MXFP8 experts copied bit for bit into QMoE's float formats (our ONNX Runtime
+  // build), the other weights at 8 bits; text only. A looped transformer: layers 6-17 run three times, so 48 layer
+  // applications per token, each with its own KV cache (and convolution states), counted as `layers`.
+  architecture: {
+    family: 'inkling2',
+    parameterCount: 26_400_000_000,
+    // 3.4B per layer pass; the looped layers' extra passes make 5.4B a token.
+    activeParameterCount: 5_400_000_000,
+    layers: 48,
+    hiddenSize: 2304,
+    kvHeads: 8,
+    headDim: 128,
+    vocabSize: 200058,
+    maxContextTokens: 262144,
+  },
+  tokenizer: { path: 'tokenizer.json', sizeBytes: 26178678, sha256: '7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6' },
+  // Each part of a reply is a message of its own (thinking, then the answer): tokenizer/harmony.ts, InklingStream.
+  // Thinking off is effort 0; on, the template's default 0.9.
+  promptFormat: { kind: 'inkling', stopTokens: ['<|content_model_end_sampling|>'], reasoning: true, thinkingSwitch: true, disableThinking: true },
+  // Thinking Machines' sampling (temperature 1.0).
+  generation: { ...REASONING_GENERATION, temperature: 1.0 },
+  quality: {
+    rank: 15,
+    summary: 'Thinking Machines’ looped mixture-of-experts model: strong at code, agents and long documents. A 19 GB download for big GPUs.',
+    scores: [
+      { benchmark: 'SWE-Bench Verified (bash only)', score: 79.2, source: 'Inkling 2 Mini model card' },
+      { benchmark: 'Terminal-Bench 2.1', score: 71.6, source: 'Inkling 2 Mini model card' },
+      { benchmark: 'LongBench v2', score: 66.9, source: 'Inkling 2 Mini model card' },
+    ],
+  },
+  experimental: 'A very large model (19 GB of weights): it may not fit in this device’s memory as a whole.',
+  artifacts: [
+    {
+      id: 'onnx-q4f16',
+      engine: 'onnx-webgpu',
+      format: 'onnx',
+      precision: 'q4f16',
+      requiredGpuFeatures: ['shader-f16'],
+      graph: { path: 'model.onnx', sizeBytes: 2744516, sha256: 'db85ae8690e9ec30169b4d5f8bec47dc17d13921d370585e1f1298483dbff3f0' },
+      externalData: [{ path: 'model.onnx.data', sizeBytes: 18910498464, sha256: 'a3c4b0af4f784eb9beac9054ce2f8c803e19f89676e3c93d11e80e90c471d237' }],
+      kvCacheType: 'float16',
+      keepsFloat32: true,
+      logitSoftcap: { multiplier: 1, cap: 30 },
+      largestTensorBytes: 679477248,
+      computeOps: 6350,
+      experts: { bytes: 17071865856, largestBytes: 8460288 },
+    },
+  ],
+};
+
 export const NEMOTRON35_BOLT_E4B: ModelSpec = {
   id: 'nemotron-3.5-bolt-e4b',
   name: 'Nemotron 3.5 Bolt E4B',
@@ -4490,6 +4550,7 @@ const ALL_MODELS: readonly ModelSpec[] = [
   NEMOTRON3_NANO,
   FLINT,
   MUSE_GLIMMER_30B,
+  INKLING_2_MINI,
   GEMMA3_12B_IT,
   NANBEIGE43_33B_IQ2,
   NANBEIGE43_33B_Q4,

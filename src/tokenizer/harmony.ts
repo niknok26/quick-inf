@@ -157,3 +157,42 @@ export class Gemma4Stream {
     return this.decoder.flush() + (this.thinking ? '</think>' : '');
   }
 }
+
+/**
+ * Inkling 2 writes each part of a reply as a message of its own: `<|message_model|><|content_thinking|>…<|end_message|>`
+ * for its reasoning, then `<|message_model|><|content_text|>…<|end_message|>` for the answer. This turns that into the
+ * `<think>…</think>answer` form; the message markers are dropped.
+ */
+export class InklingStream {
+  private readonly decoder: StreamingDecoder;
+  private readonly thought: number;
+  private readonly text: number;
+  private readonly markers: Set<number>;
+  private thinking = false;
+
+  constructor(tokenizer: BpeTokenizer) {
+    this.decoder = new StreamingDecoder(tokenizer);
+    this.thought = tokenizer.specialTokenId('<|content_thinking|>');
+    this.text = tokenizer.specialTokenId('<|content_text|>');
+    this.markers = new Set(['<|message_model|>', '<|end_message|>'].map((t) => tokenizer.specialTokenId(t)));
+  }
+
+  push(id: number): string {
+    if (id === this.thought) {
+      const open = this.thinking ? '' : '<think>';
+      this.thinking = true;
+      return this.decoder.flush() + open;
+    }
+    if (id === this.text) {
+      const close = this.thinking ? '</think>' : '';
+      this.thinking = false;
+      return this.decoder.flush() + close;
+    }
+    if (this.markers.has(id)) return this.decoder.flush();
+    return this.decoder.push(id);
+  }
+
+  flush(): string {
+    return this.decoder.flush() + (this.thinking ? '</think>' : '');
+  }
+}

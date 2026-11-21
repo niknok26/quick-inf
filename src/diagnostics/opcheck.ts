@@ -12,6 +12,8 @@ import { loadOrt } from '../runtime/onnx/ort-env';
 
 interface TensorSpec {
   name: string;
+  /** The data file's name part, when the tensor's name can't be one (it has slashes). */
+  file?: string;
   type: 'float16' | 'float32' | 'int32' | 'int64' | 'uint8';
   dims: number[];
 }
@@ -58,7 +60,7 @@ async function run(): Promise<void> {
     });
     const results = await session.run(feeds);
     for (const output of spec.outputs) {
-      const want = new Float32Array(await read(output.name));
+      const want = new Float32Array(await read(output.file ?? output.name));
       const data = results[output.name]!.data as Uint16Array | Float32Array;
       const got = data instanceof Uint16Array ? Float32Array.from(data, halfToFloat) : data;
       let maxError = 0;

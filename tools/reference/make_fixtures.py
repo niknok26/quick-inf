@@ -120,6 +120,8 @@ FIXTURES = {
     "gemma-3-12b-it": {"name": "gemma-3-12b", "template_kwargs": {}, "stops": ["<end_of_turn>", "<eos>"]},
     "nemotron-3-nano-30b-a3b": {"name": "nemotron-3-nano", "template_kwargs": {}, "stops": ["<|im_end|>", "</s>"]},
     # end own exports (2026-10-13)
+    # Thinking off by default in the app: effort 0.
+    "inkling-2-mini": {"name": "inkling-2-mini", "template_kwargs": {"reasoning_effort": 0.0}, "stops": ["<|content_model_end_sampling|>"]},
 }
 # Models whose template turns thinking on and off (the app's thinking switch): their chat cases are also rendered
 # with enable_thinking true and false.
@@ -128,6 +130,11 @@ THINKING_SWITCH = {
     "qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "qwen3.8-27b", "qwen3.6-35b-a3b", "ternary-bonsai-2-2b",
     "nanbeige4.3-33b", "smollm3-3b", "glm-4.7-flash", "nemotron-3-nano-30b-a3b",
     "gemma-4-e2b-it", "gemma-4-e4b-it", "gemma-4-26b-a4b-it", "gemma-4-12b-it", "nemotron-3.5-bolt-e4b",
+    "inkling-2-mini",
+}
+# Templates whose switch is a setting other than enable_thinking: (on, off).
+THINKING_KWARGS = {
+    "inkling-2-mini": ({"reasoning_effort": 0.9}, {"reasoning_effort": 0.0}),
 }
 TOP_K = 10
 STEPS = 32
@@ -224,7 +231,8 @@ def tokenizer_fixtures(model_id: str, tok: Tokenizer, template: ChatTemplate):
         return cases
 
     chat = chat_cases()
-    thinking = {"on": chat_cases(enable_thinking=True), "off": chat_cases(enable_thinking=False)} if model_id in THINKING_SWITCH else None
+    on, off = THINKING_KWARGS.get(model_id, ({"enable_thinking": True}, {"enable_thinking": False}))
+    thinking = {"on": chat_cases(**on), "off": chat_cases(**off)} if model_id in THINKING_SWITCH else None
 
     end = tok.token_to_id(FIXTURES[model_id]["stops"][0])
     newline = tok.encode("\n", add_special_tokens=False).ids
