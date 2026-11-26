@@ -56,6 +56,7 @@ async function run(): Promise<void> {
   const r = await handle.result;
   const seconds = r.samples / r.sampleRate;
   log(`${seconds.toFixed(2)} s of audio in ${Math.round(r.timings.totalMs)} ms (rtf ${(r.timings.totalMs / 1000 / seconds).toFixed(2)})`);
+  log(`stages (ms): ${JSON.stringify(Object.fromEntries(Object.entries(r.timings.stages ?? {}).map(([k, v]) => [k, Math.round(v)])))}`);
   state.results.clip = { text, refName, audioS: +seconds.toFixed(2), totalMs: Math.round(r.timings.totalMs), wav: await base64(encodeWav(pieces, r.sampleRate)) };
 }
 

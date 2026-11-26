@@ -64,7 +64,8 @@ export interface SpeechGenerationResult {
   sampleRate: number;
   /** Total samples handed out in progress events. */
   samples: number;
-  timings: { firstAudioMs: number; totalMs: number };
+  /** `stages`: milliseconds spent per pipeline step, where the engine measures them (Qwen3-TTS). */
+  timings: { firstAudioMs: number; totalMs: number; stages?: Record<string, number> };
 }
 
 export interface SpeechFileSource {
@@ -89,6 +90,7 @@ const CHUNK_SILENCE_S = 0.3;
 export class SpeechEngine {
   private loaded: Loaded | null = null;
   private cancelRequested = false;
+  private stages: Record<string, number> = {};
 
   get modelId(): string | null {
     return this.loaded?.model.id ?? null;
@@ -193,6 +195,7 @@ export class SpeechEngine {
     const loaded = this.loaded;
     if (!loaded) throw new RuntimeError('not-loaded', 'Load the model first.');
     this.cancelRequested = false;
+    this.stages = {};
     const start = performance.now();
     let firstAudioMs = 0;
     let samples = 0;
@@ -255,7 +258,7 @@ export class SpeechEngine {
         await this.zonos(loaded, pipeline, request, emit);
         break;
     }
-    return { sampleRate: loaded.model.sampleRate, samples, timings: { firstAudioMs, totalMs: performance.now() - start } };
+    return { sampleRate: loaded.model.sampleRate, samples, timings: { firstAudioMs, totalMs: performance.now() - start, ...(Object.keys(this.stages).length > 0 && { stages: this.stages }) } };
   }
 
   private throwIfCancelled(): void {
@@ -770,10 +773,13 @@ export class SpeechEngine {
     const rows: Float32Array[] = [];
     /** Runs one step of the pipeline, naming it in the error (ONNX Runtime's own message does not say which graph failed). */
     const named = async <T>(graph: string, run: () => Promise<T>): Promise<T> => {
+      const began = performance.now();
       try {
         return await run();
       } catch (err) {
         throw new RuntimeError('generation-failed', `${graph}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this.stages[graph] = (this.stages[graph] ?? 0) + performance.now() - began;
       }
     };
     // Cloning (streaming ICL): the text's rows past the reference clip's frames, fed to the talker one per frame.
@@ -848,7 +854,7 @@ export class SpeechEngine {
         if (c0 === eos) break;
         const frame = [c0];
         // The code predictor computes in float32 (its float16 build overflows).
-        const cpLm = builderDecoder(cp, { layers: QWEN_CP_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width: QWEN_CP_WIDTH, float32: true });
+        const cpLm = await named('cp setup', async () => builderDecoder(cp, { layers: QWEN_CP_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width: QWEN_CP_WIDTH, float32: true }));
         try {
           let h = hidden;
           if (cpProject) {
@@ -856,26 +862,27 @@ export class SpeechEngine {
             h = (out.cp_hidden!.data as Float32Array).slice();
             out.cp_hidden!.dispose();
           }
-          let x = [h, (await cpEmbed([c0]))[0]!];
+          let x = [h, (await named('cp embed lookup', () => cpEmbed([c0])))[0]!];
           for (let j = 0; j < groups - 1; j++) {
             const { logits: cpLogits } = await named('code predictor', () => cpLm.run(x));
             const c = sampleTopK(cpLogits.subarray(j * cpVocab, (j + 1) * cpVocab));
             frame.push(c);
-            if (j < groups - 2) x = await cpEmbed([vocab + j * cpVocab + c]);
+            if (j < groups - 2) x = await named('cp embed lookup', () => cpEmbed([vocab + j * cpVocab + c]));
           }
         } finally {
-          cpLm.dispose();
+          await named('cp setup', async () => cpLm.dispose());
         }
         frames.push(frame);
         // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).
-        const sum = add(...(await embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c)))), trailing[frames.length] ?? padE!);
+        const sum = add(...(await named('codec embed sum', () => embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c))))), trailing[frames.length] ?? padE!);
         ({ logits, hidden } = await named('talker step', () => talkerLm.run([sum])));
       }
     } finally {
       talkerLm.dispose();
     }
     if (frames.length === 0) return;
-    emit(await this.qwenDecode(decoder, frames), 1, 1);
+    emit(await named('codec decode', () => this.qwenDecode(decoder, frames)), 1, 1);
+    this.stages.frames = frames.length;
   }
 
   /**
