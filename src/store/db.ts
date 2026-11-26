@@ -13,10 +13,13 @@
 //            src/ui/workspaces/speech/speech-store.ts).
 // Version 7: `voices` — saved reference voices for cloning speech models (see src/store/voices.ts).
 // Version 8: `narration` — generated narration audio (WAV blobs) cached by content key (see src/narration/).
+// Version 9: `narrationMeta` — size and last-access time per cached narration (LRU cap, see src/narration/);
+//            the narration cache was emptied (it is regenerable); `voices` was removed: reference voices live in
+//            the browser's private file storage instead (see src/store/voice-files.ts).
 
 const DB_NAME = 'quick-inf';
 
-const UPGRADES: ((db: IDBDatabase) => void)[] = [
+const UPGRADES: ((db: IDBDatabase, tx: IDBTransaction) => void)[] = [
   (db) => {
     db.createObjectStore('artifacts', { keyPath: 'key' });
   },
@@ -45,9 +48,14 @@ const UPGRADES: ((db: IDBDatabase) => void)[] = [
   (db) => {
     db.createObjectStore('narration', { keyPath: 'key' });
   },
+  (db, tx) => {
+    if (db.objectStoreNames.contains('voices')) db.deleteObjectStore('voices');
+    tx.objectStore('narration').clear();
+    db.createObjectStore('narrationMeta', { keyPath: 'key' });
+  },
 ];
 
-export type StoreName = 'artifacts' | 'sessions' | 'messages' | 'runs' | 'deviceTests' | 'engineState' | 'images' | 'speech' | 'voices' | 'narration';
+export type StoreName = 'artifacts' | 'sessions' | 'messages' | 'runs' | 'deviceTests' | 'engineState' | 'images' | 'speech' | 'narration' | 'narrationMeta';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -55,7 +63,7 @@ export function openDb(): Promise<IDBDatabase> {
   dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, UPGRADES.length);
     request.onupgradeneeded = (e) => {
-      for (let v = e.oldVersion; v < UPGRADES.length; v++) UPGRADES[v]!(request.result);
+      for (let v = e.oldVersion; v < UPGRADES.length; v++) UPGRADES[v]!(request.result, request.transaction!);
     };
     request.onsuccess = () => {
       const db = request.result;

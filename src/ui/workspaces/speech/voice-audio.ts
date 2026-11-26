@@ -1,6 +1,6 @@
 // Turning a recorded or chosen audio file into a reference clip: mono float32 at the cloning model's 24 kHz.
 
-import { VOICE_SAMPLE_RATE } from '../../../store/voices';
+import { VOICE_SAMPLE_RATE } from '../../../store/voice-files';
 
 /** Averages the channels of a clip into one. */
 export function mixToMono(channels: Float32Array[]): Float32Array {

@@ -47,6 +47,7 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
   const [text, setText] = useState(() => clip?.text ?? '');
   const [settings, setSettings] = useState<SpeechSettings>(() => (clip ? { ...clip.settings } : { ...spec!.defaults }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [voiceProblem, setVoiceProblem] = useState('');
   const runtime = modelRuntimeState(useRuntimeStatus(), model.id);
   const busy = clip?.status === 'generating';
   const voices = useVoices();
@@ -57,12 +58,21 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
   const voice = cloning ? (voices.find((v) => v.id === settings.voice) ?? voices[0]) : undefined;
   const canSpeak = ready && (!cloning || !!voice);
 
-  function speak(e?: FormEvent) {
+  async function speak(e?: FormEvent) {
     e?.preventDefault();
     const words = text.trim();
     if (!words || busy || !canSpeak || !spec) return;
     if (!clip) onRename(words.length > TITLE_LENGTH ? `${words.slice(0, TITLE_LENGTH)}…` : words);
-    startSpeech(session.id, spec, words, voice ? { ...settings, voice: voice.id } : settings, voice && { audio: voice.audio, text: voice.transcript });
+    const used = voice ? { ...settings, voice: voice.id } : settings;
+    if (!voice) return startSpeech(session.id, spec, words, used);
+    try {
+      const saved = await voiceStore.load(voice.id);
+      setVoiceProblem('');
+      startSpeech(session.id, spec, words, used, { audio: saved.audio, text: saved.transcript });
+    } catch (err) {
+      // The voice's file is missing or failed its integrity check: said beside the composer, and the clip is kept.
+      setVoiceProblem(err instanceof Error ? err.message : String(err));
+    }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -111,6 +121,7 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
           {settingsOpen && <SettingsPanel spec={spec} settings={settings} onChange={setSettings} />}
           {cloning && settingsOpen && <VoicePanel voices={voices} selectedId={voice?.id} onSelect={(id) => setSettings({ ...settings, voice: id })} />}
           {cloning && !voice && <p className="muted">Open Settings and add a reference voice to speak with.</p>}
+          {voiceProblem && <p className="voice-panel__warn">{voiceProblem}</p>}
           <div className="composer__box">
             <textarea
               className="composer__input"

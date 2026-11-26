@@ -6,7 +6,7 @@
 
 import { getRuntimeClient } from '../runtime/client';
 import { Narrator, type NarrationSlide } from '../narration/narrator';
-import { listVoices } from '../store/voices';
+import { listVoices, loadVoice } from '../store/voice-files';
 
 const params = new URLSearchParams(location.search);
 const modelId = params.get('model') ?? 'qwen3-tts-0.6b-base';
@@ -30,9 +30,9 @@ const log = (line: string) => {
 };
 
 async function run(): Promise<void> {
-  const voices = await listVoices();
-  const voice = voices.sort((a, b) => a.createdAt - b.createdAt)[0];
-  if (!voice) throw new Error('No saved reference voice: add one in a speech tab\u2019s Settings first.');
+  const first = (await listVoices())[0];
+  if (!first) throw new Error('No saved reference voice: add one in a speech tab\u2019s Settings first.');
+  const voice = await loadVoice(first.id);
   log(`voice "${voice.name}", ${SLIDES.length} slides, model ${modelId}`);
   const narrator = new Narrator({ client: getRuntimeClient(), modelId, voice });
   w.__narrator = narrator;

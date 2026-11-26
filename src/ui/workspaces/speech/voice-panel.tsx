@@ -1,15 +1,16 @@
 // Reference voices for cloning models (Qwen3-TTS Base): pick a saved voice, or make one from a recording or an audio
-// file plus what it says. Voices stay on the device (see src/store/voices.ts).
+// file plus what it says. Voices stay on the device (see src/store/voice-files.ts). A protected voice (the clip the app
+// was given) can be selected and deleted, but has no player and its clip is never shown or offered for download.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { VOICE_SAMPLE_RATE, type VoiceRow } from '../../../store/voices';
+import { useEffect, useRef, useState } from 'react';
+import { VOICE_SAMPLE_RATE, type VoiceMeta } from '../../../store/voice-files';
 import { decodeVoiceBlob } from './voice-audio';
 import { voiceStore } from './voice-store';
 import { isRecommendedDuration, validateVoice } from './voice-validation';
 import { encodeWav } from './wav';
 
 interface VoicePanelProps {
-  voices: readonly VoiceRow[];
+  voices: readonly VoiceMeta[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
 }
@@ -20,6 +21,7 @@ export function VoicePanel({ voices, selectedId, onSelect }: VoicePanelProps) {
   const [clip, setClip] = useState<Float32Array | null>(null);
   const [recordedSeconds, setRecordedSeconds] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const selected = voices.find((v) => v.id === selectedId);
@@ -27,9 +29,26 @@ export function VoicePanel({ voices, selectedId, onSelect }: VoicePanelProps) {
   const seconds = clip ? clip.length / VOICE_SAMPLE_RATE : null;
   const problems = Object.values(validateVoice(name, transcript, seconds)).filter(Boolean);
 
-  // The selected voice's clip, as a playable URL.
-  const previewUrl = useMemo(() => (selected ? URL.createObjectURL(encodeWav([selected.audio], selected.sampleRate)) : null), [selected]);
-  useEffect(() => () => void (previewUrl && URL.revokeObjectURL(previewUrl)), [previewUrl]);
+  // The selected voice's clip as a playable URL (loaded from the device's file storage; never for a protected voice).
+  const previewId = selected && !selected.protected ? selected.id : null;
+  useEffect(() => {
+    if (!previewId) return;
+    let alive = true;
+    let url: string | null = null;
+    voiceStore
+      .load(previewId)
+      .then((voice) => {
+        if (!alive) return;
+        url = URL.createObjectURL(encodeWav([voice.audio], voice.sampleRate));
+        setPreviewUrl(url);
+      })
+      .catch((err: unknown) => alive && setNotice(err instanceof Error ? err.message : String(err)));
+    return () => {
+      alive = false;
+      setPreviewUrl(null);
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [previewId]);
   // Leaving mid-recording releases the microphone.
   useEffect(
     () => () => {
@@ -80,18 +99,18 @@ export function VoicePanel({ voices, selectedId, onSelect }: VoicePanelProps) {
   async function save(): Promise<void> {
     if (!clip || problems.length > 0) return;
     try {
-      const row = await voiceStore.create(name.trim(), transcript.trim(), clip);
+      const meta = await voiceStore.create(name.trim(), transcript.trim(), clip);
       setName('');
       setTranscript('');
       setClip(null);
       setNotice('');
-      onSelect(row.id);
+      onSelect(meta.id);
     } catch {
       setNotice('Could not save the voice on this device.');
     }
   }
 
-  async function remove(voice: VoiceRow): Promise<void> {
+  async function remove(voice: VoiceMeta): Promise<void> {
     if (!confirm(`Delete the voice “${voice.name}”?`)) return;
     await voiceStore.remove(voice.id);
     const next = voices.find((v) => v.id !== voice.id);
@@ -113,10 +132,11 @@ export function VoicePanel({ voices, selectedId, onSelect }: VoicePanelProps) {
           </select>
         </label>
       )}
-      {selected && previewUrl && (
+      {selected && (
         <div className="voice-panel__preview">
-          <audio controls src={previewUrl} />
-          <span className="muted">“{selected.transcript}”</span>
+          {previewUrl && <audio controls controlsList="nodownload" src={previewUrl} />}
+          {!selected.protected && <span className="muted">“{selected.transcript}”</span>}
+          {selected.protected && <span className="muted">The reference clip provided with the app. It can be used for narration or deleted.</span>}
           <button type="button" className="button button--ghost button--small voice-panel__delete" onClick={() => void remove(selected)}>
             Delete this voice
           </button>
