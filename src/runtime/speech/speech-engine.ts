@@ -854,7 +854,7 @@ export class SpeechEngine {
         for (const t of seen) logits[t] = logits[t]! < 0 ? logits[t]! * 1.05 : logits[t]! / 1.05;
         for (let t = vocab - 1024; t < vocab; t++) if (t !== eos) logits[t] = -Infinity;
         if (step < 2) logits[eos] = -Infinity;
-        const c0 = sampleTopK(logits);
+        const c0 = sampleTopK(logits, request.settings.temperature ?? 0.9, request.settings.topK ?? 50);
         if (c0 === eos) break;
         const frame = [c0];
         // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).

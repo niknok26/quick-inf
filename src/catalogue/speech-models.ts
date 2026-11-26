@@ -334,6 +334,10 @@ export interface SpeechSettings {
   instruct?: string;
   speed?: number;
   steps?: number;
+  /** Qwen3-TTS: sampling of each frame's first code (default 0.9). Lower is steadier, less varied. */
+  temperature?: number;
+  /** Qwen3-TTS: candidates kept when sampling each frame's first code (default 50). */
+  topK?: number;
 }
 
 const APACHE_2: ModelLicense = { name: 'Apache 2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' };

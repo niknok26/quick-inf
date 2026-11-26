@@ -3,7 +3,7 @@
 // transcript sent as `reference` on the request) and reports the time and real-time factor, with the clip as a base64
 // WAV. The reference lives in the dev model cache at refs/local/<name>.wav with its transcript in <name>.txt.
 //
-//   /clone-smoke.html?ref=<name>[&text=<sentence>][&lang=english]
+//   /clone-smoke.html?model=<id>&ref=<name>[&text=<sentence>][&lang=english][&temp=0.8&topk=30]
 // Results are exposed as `window.__bench`.
 
 import { getRuntimeClient } from '../runtime/client';
@@ -50,7 +50,12 @@ async function run(): Promise<void> {
   log(`loaded on the ${loaded.processor} in ${Math.round(performance.now() - loadStart)} ms`);
   const pieces: Float32Array[] = [];
   const handle = client.generateSpeech(
-    { text, settings: { voice: 'clone', language: params.get('lang') ?? 'english' }, reference: { audio, text: refText } },
+    { text, settings: {
+        voice: 'clone',
+        language: params.get('lang') ?? 'english',
+        ...(params.has('temp') && { temperature: Number(params.get('temp')) }),
+        ...(params.has('topk') && { topK: Number(params.get('topk')) }),
+      }, reference: { audio, text: refText } },
     (p) => pieces.push(p.audio),
   );
   const r = await handle.result;

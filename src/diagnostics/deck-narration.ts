@@ -1,6 +1,7 @@
 // Development harness for deck narration (src/narration): opens a small deck, narrates it in the first saved
 // reference voice (made in a speech tab's Settings) and shows each slide's state as it goes. Reload to see the cache
-// make every slide ready at once. `window.__narrator` is the Narrator (try `setCurrent(3)`); `window.__bench` has the log.
+// make every slide ready at once. Buttons play a slide or make it again (Regenerate). `window.__narrator` is the
+// Narrator (try `setCurrent(3)`); `window.__bench` has the log.
 //
 //   /deck-narration.html?model=qwen3-tts-0.6b-base[&current=0][&slides=<JSON [{"id","text"}]>]
 
@@ -50,6 +51,22 @@ async function run(): Promise<void> {
     out.textContent = `${lines.join('\n')}\n\n${state.log.join('\n')}`;
   };
   narrator.subscribe(render);
+  // Per slide: play it, or make it again (a new take; the old clip plays until the new one is ready).
+  const controls = document.createElement('div');
+  document.body.append(controls);
+  for (const slide of SLIDES) {
+    const row = document.createElement('p');
+    for (const [label, act] of [
+      [`Play ${slide.id}`, async () => void new Audio(URL.createObjectURL(await narrator.audio(slide.id))).play()],
+      [`Regenerate ${slide.id}`, () => narrator.regenerate(slide.id)],
+    ] as const) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.onclick = () => void act();
+      row.append(button, ' ');
+    }
+    controls.append(row);
+  }
   await narrator.start(SLIDES, Number(params.get('current') ?? 0));
   render();
   for (const s of SLIDES) await narrator.audio(s.id);
