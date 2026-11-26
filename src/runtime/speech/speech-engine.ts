@@ -845,16 +845,24 @@ export class SpeechEngine {
     const talkerLm = builderDecoder(talker, { layers: QWEN_TALKER_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width, float32: pipeline.talkerFloat32 });
     const frames: number[][] = [];
     try {
+      const genStart = performance.now();
+      const devC0: number[] = [];
       let { logits, hidden } = await named('talker prefill', () => talkerLm.run(rows));
+      if (import.meta.env.DEV) console.info(`[qwen3tts] prompt ${rows.length} rows, prefill done after ${Math.round(performance.now() - genStart)} ms`);
       // Sampling occasionally never picks the stop code: frames are capped by the text's length at about twice normal
       // speech (4.5 frames per token on average, up to 8 on short sentences), within the checkpoints' max_new_tokens.
       for (let step = 0; step < maxFrames; step++) {
         this.throwIfCancelled();
+        if (import.meta.env.DEV && step % 10 === 0) console.info(`[qwen3tts] frame ${step}, ${Math.round(performance.now() - genStart)} ms since prefill started`);
         const seen = new Set(frames.map((f) => f[0]!));
         for (const t of seen) logits[t] = logits[t]! < 0 ? logits[t]! * 1.05 : logits[t]! / 1.05;
         for (let t = vocab - 1024; t < vocab; t++) if (t !== eos) logits[t] = -Infinity;
         if (step < 2) logits[eos] = -Infinity;
         const c0 = sampleTopK(logits, request.settings.temperature ?? 0.9, request.settings.topK ?? 50);
+        if (import.meta.env.DEV) {
+          devC0.push(c0);
+          if (step % 10 === 9) console.info(`[qwen3tts] c0 ${devC0.slice(-10).join(',')} eosLogit ${logits[eos]!.toFixed(2)} max ${Math.max(...logits.filter(Number.isFinite)).toFixed(2)}`);
+        }
         if (c0 === eos) break;
         const frame = [c0];
         // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).

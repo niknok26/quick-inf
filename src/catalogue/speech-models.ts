@@ -1102,8 +1102,8 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
         data: [file('talker/model.onnx.data', 516030464, '353854c86951f978ed3be2d1a78104b2f77d8f32481dd2ab964c8fdf6fdf3b43')],
       },
       cpFrame: {
-        graph: file('code_predictor/frame.onnx', 22021784, '37249b72cbfdf4e479a379e71a3fa09aee34d2802bdb9b03e6f0b1d45055a5c3'),
-        data: [file('code_predictor/model.onnx.data', 104137728, 'a063b2ee0f42e52058f65bba8dfbaaf65d3f2ca71b7bc0f60a7baed5e363ef02')],
+        graph: file('code_predictor/frame.onnx', 22003883, '6bc6298595dd15195a7eb83e0eec8b1b0f62c627eb5b453fa40bcfcdfab771c9'),
+        data: [file('code_predictor/model.onnx.data', 157467648, '78b51949a5ef42945423e326725e1deaafd023a85f07cfb9e62eee4cae60ef62')],
       },
       textEmbed: { graph: file('text_embed_q4.onnx', 97239399, '0d69cc0dfb8868a0c6df24f96539a04da3953eff527e82333b9a68844eafe4a5') },
       codecEmbed: { graph: file('codec_embed_q4.onnx', 21627240, 'e837468ed5aadc73e5ec0f7a3437f15fe137aac70ecc3a5c265300e93856e4b4') },

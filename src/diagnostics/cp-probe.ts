@@ -14,7 +14,11 @@ import { loadOrt } from '../runtime/onnx/ort-env';
 const params = new URLSearchParams(location.search);
 const repo = params.get('model') ?? 'Qwen__Qwen3-TTS-12Hz-0.6B-Base';
 const frames = Number(params.get('frames') ?? 20);
+/** Size of the random hidden state (the talker's real ones are around 10-15 per value). */
+const hiddenScale = Number(params.get('scale') ?? 2);
 const mergedFile = params.get('graph') ?? 'frame.onnx';
+/** Another build of the predictor (a directory beside code_predictor/ holding model.onnx, model.onnx.data, frame.onnx). */
+const cpDir = params.get('cpdir') ?? 'code_predictor';
 const base = `/__models/${repo}/local`;
 const LAYERS = 5;
 const KV_HEADS = 8;
@@ -44,6 +48,7 @@ const kv = (prefix: string) => Array.from({ length: LAYERS }, (_, i) => [`${pref
 const gumbelOf = (u: Float32Array) => Float32Array.from(u, (x) => -TEMPERATURE * Math.log(-Math.log(x)));
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
 
+const loggedSteps = new Set<number>();
 let seed = 987654321;
 const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
 
@@ -72,9 +77,9 @@ async function run(): Promise<void> {
   const ort = await loadOrt();
   const device = await getGpuDevice();
   const [graph, data, mergedGraph, embedGraph] = await Promise.all([
-    fetchBytes(`${base}/code_predictor/model.onnx`),
-    fetchBytes(`${base}/code_predictor/model.onnx.data`),
-    fetchBytes(`${base}/code_predictor_probe/${mergedFile}`),
+    fetchBytes(`${base}/${cpDir}/model.onnx`),
+    fetchBytes(`${base}/${cpDir}/model.onnx.data`),
+    fetchBytes(params.has('cpdir') ? `${base}/${cpDir}/frame.onnx` : `${base}/code_predictor_probe/${mergedFile}`),
     fetchBytes(`${base}/codec_embed_q4.onnx`),
   ]);
   const external = { 'model.onnx.data': bytesSource(data) };
@@ -118,6 +123,11 @@ async function run(): Promise<void> {
       void (res.hidden_states!.data as Float32Array);
       res.logits!.dispose();
       res.hidden_states!.dispose();
+      if (j < 2 && !loggedSteps.has(j)) {
+        loggedSteps.add(j);
+        const top = Array.from(head.keys()).sort((a, b) => head[b]! - head[a]!).slice(0, 4);
+        log(`classic step ${j} (hidden scale ${hiddenScale}): top ${top.map((t) => `${t}:${head[t]!.toFixed(3)}`).join(' ')}`);
+      }
       // Top-k as the graph does it: the logits at or above the k-th largest, Gumbel noise per token.
       const kth = [...head].sort((a, b) => b - a)[TOPK - 1]!;
       let best = -Infinity;
@@ -155,7 +165,7 @@ async function run(): Promise<void> {
   }
 
   const trial = () => ({
-    hidden: Float32Array.from({ length: WIDTH }, () => (random() - 0.5) * 2),
+    hidden: Float32Array.from({ length: WIDTH }, () => (random() - 0.5) * hiddenScale),
     c0: Math.floor(random() * 2048),
     noise: Float32Array.from({ length: STEPS * GROUP }, () => 1e-6 + random() * (1 - 2e-6)),
   });
@@ -169,6 +179,7 @@ async function run(): Promise<void> {
     const a = await classic(hidden, c0, noise);
     const b = await mergedFrame(hidden, c0, noise);
     const same = a.codes.every((c, i) => c === b.codes[i]);
+    if (t < 3) log(`trial ${t}: merged codes ${b.codes.join(',')} sum[0..3] ${[...b.sum.subarray(0, 3)].map((v) => v.toFixed(4)).join(',')}`);
     if (!same) {
       mismatches++;
       log(`trial ${t}: codes differ\n  classic ${a.codes.join(',')}\n  merged  ${b.codes.join(',')}`);
