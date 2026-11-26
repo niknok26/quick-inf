@@ -1089,7 +1089,7 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
     summary: 'Qwen3-TTS voice cloning: a reference clip of the voice in place of a built-in speaker.',
     license: APACHE_2,
     source: { host: 'huggingface', repo: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base', revision: 'local' },
-    precision: 'q4',
+    precision: 'q8', // the talker and the code predictor are int8 (int4 gave wrong results on a phone GPU); the lookup tables and codec are int4
     sampleRate: 24000,
     voices: [],
     languages: QWEN_LANGUAGES,
