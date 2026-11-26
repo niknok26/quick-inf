@@ -854,7 +854,7 @@ export class SpeechEngine {
         for (const t of seen) logits[t] = logits[t]! < 0 ? logits[t]! * 1.05 : logits[t]! / 1.05;
         for (let t = vocab - 1024; t < vocab; t++) if (t !== eos) logits[t] = -Infinity;
         if (step < 2) logits[eos] = -Infinity;
-        const c0 = sampleTopK(logits, request.settings.temperature ?? (clone ? CLONE_TEMPERATURE : 0.9), request.settings.topK ?? (clone ? CLONE_TOP_K : 50));
+        const c0 = sampleTopK(logits, request.settings.temperature ?? 0.9, request.settings.topK ?? 50);
         if (c0 === eos) break;
         const frame = [c0];
         // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).
@@ -2135,13 +2135,6 @@ function builderDecoder(graph: InferenceSession, shape: { layers: number; kvHead
 }
 
 /** Qwen3-TTS 12 Hz: the code predictor's width, the talker's and code predictor's layers, their KV heads and head size. */
-/**
- * First-code sampling when cloning a voice: a little steadier than the checkpoint's 0.9 / 50. In blind listening (one
- * line, 0.6B, 12 clips) 0.8 / 30 gave mostly good, natural takes; 0.7 / 20 was no better and more often flat or dry.
- * Thin evidence: change it with `settings.temperature` / `topK`.
- */
-const CLONE_TEMPERATURE = 0.8;
-const CLONE_TOP_K = 30;
 const QWEN_CP_WIDTH = 1024;
 const QWEN_TALKER_LAYERS = 28;
 const QWEN_CP_LAYERS = 5;
