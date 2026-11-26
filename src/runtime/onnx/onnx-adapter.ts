@@ -1636,9 +1636,11 @@ export async function createGraphSession(
     quantizeWeights?: 4 | 8;
     /** Compute a float16 graph in float32 (see external-weights.ts). */
     computeFloat32?: boolean;
+    /** Records the GPU commands of the first run and replays them (static shapes, inputs and outputs on the GPU). */
+    graphCapture?: boolean;
   } = {},
 ): Promise<InferenceSession> {
-  const { matMulNBitsAccuracy, optimization = 'all', freeDimensions, quantizeWeights, computeFloat32 } = options;
+  const { matMulNBitsAccuracy, optimization = 'all', freeDimensions, quantizeWeights, computeFloat32, graphCapture } = options;
   const ort = await loadRuntime();
   if (device) {
     const adapter = await getGpuAdapter();
@@ -1657,6 +1659,7 @@ export async function createGraphSession(
       // (SD Turbo 9.7 → 5.2 GB, Z-Image 12.3 → 7.0 GB), at the cost of about 1–2 GB staying cached between runs.
       executionProviders: device ? [{ name: 'webgpu', device, storageBufferCacheMode: 'bucket' }] : ['wasm'],
       graphOptimizationLevel: optimization,
+      ...(graphCapture && { enableGraphCapture: true }),
       ...(freeDimensions && { freeDimensionOverrides: freeDimensions }),
       // Development: ONNX Runtime's per-node log (set in the worker to find a failing kernel).
       ...((globalThis as { __quickInfOrtVerbose?: boolean }).__quickInfOrtVerbose && { logSeverityLevel: 0, logVerbosityLevel: 4 }),
