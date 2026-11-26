@@ -1,9 +1,9 @@
-// Development latency probe for merging the Qwen3-TTS code predictor's 15 steps into one graph (see
-// voice-lab/ONDEVICE-TTS-HANDOVER.md section 11). Compares, on the same inputs, one frame as the engine runs it today
-// (15 separate runs of the builder graph, KV cache on the GPU, logits and hidden state read back each step) with one
-// run of the same graph chained 15 times (tools: qwen-web/chain_cp.py). Teacher-forced: no sampling.
+// Development check and timing of the merged Qwen3-TTS code-predictor graph (tools/export/merge_qwen3_tts_cp.py):
+// the 5-layer predictor chained 15 times with the codec-embedding lookups and the top-k / temperature sampling inside
+// one graph, against the engine's classic way (15 separate runs of the builder graph, a lookup between steps, sampling
+// in JS). Same weights, same noise: the codes and the embedding sum must match; then the time per frame.
 //
-//   /cp-probe.html?model=Qwen__Qwen3-TTS-12Hz-0.6B-Base&frames=20
+//   /cp-probe.html?model=Qwen__Qwen3-TTS-12Hz-0.6B-Base&frames=20&graph=frame.onnx
 // Results in `window.__bench`.
 
 import { getGpuDevice } from '../device/gpu';
@@ -14,6 +14,7 @@ import { loadOrt } from '../runtime/onnx/ort-env';
 const params = new URLSearchParams(location.search);
 const repo = params.get('model') ?? 'Qwen__Qwen3-TTS-12Hz-0.6B-Base';
 const frames = Number(params.get('frames') ?? 20);
+const mergedFile = params.get('graph') ?? 'frame.onnx';
 const base = `/__models/${repo}/local`;
 const LAYERS = 5;
 const KV_HEADS = 8;
@@ -21,6 +22,9 @@ const HEAD_DIM = 128;
 const GROUP = 2048;
 const STEPS = 15;
 const WIDTH = 1024;
+const VOCAB = 3072;
+const TOPK = 50;
+const TEMPERATURE = 0.9;
 
 const state: { done: boolean; error?: string; log: string[]; results: Record<string, unknown> } = { done: false, log: [], results: {} };
 (window as unknown as { __bench: typeof state }).__bench = state;
@@ -36,132 +40,167 @@ const fetchBytes = async (url: string) => {
   return new Uint8Array(await response.arrayBuffer());
 };
 const kv = (prefix: string) => Array.from({ length: LAYERS }, (_, i) => [`${prefix}.${i}.key`, `${prefix}.${i}.value`]).flat();
+/** The graph's sampling noise: TEMPERATURE * Gumbel(0,1) from uniform noise. */
+const gumbelOf = (u: Float32Array) => Float32Array.from(u, (x) => -TEMPERATURE * Math.log(-Math.log(x)));
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+
+let seed = 987654321;
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+
+// ONNX Runtime lists node placements at verbose log level; the op types left on the CPU are counted (as tts-check.ts does).
+const placement: Record<string, number> = {};
+let onCpu = false;
+if (params.has('placement')) {
+  (globalThis as { __quickInfOrtVerbose?: boolean }).__quickInfOrtVerbose = true;
+  for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      const text = args.map(String).join(' ');
+      if (text.includes('VerifyEachNodeIsAssignedToAnEp')) {
+        const header = /Node\(s\) placed on \[(\w+)\]/.exec(text);
+        const node = /AnEp\]\s{3}(\w+) \(/.exec(text);
+        if (header) onCpu = header[1] === 'CPUExecutionProvider';
+        else if (node && onCpu) placement[node[1]!] = (placement[node[1]!] ?? 0) + 1;
+        return;
+      }
+      original(...args);
+    };
+  }
+}
 
 async function run(): Promise<void> {
   const ort = await loadOrt();
   const device = await getGpuDevice();
-  const [graph, data, probeGraph, noPastGraph] = await Promise.all([
+  const [graph, data, mergedGraph, embedGraph] = await Promise.all([
     fetchBytes(`${base}/code_predictor/model.onnx`),
     fetchBytes(`${base}/code_predictor/model.onnx.data`),
-    fetchBytes(`${base}/code_predictor_probe/model.onnx`),
-    fetchBytes(`${base}/code_predictor_probe/model_nopast.onnx`),
+    fetchBytes(`${base}/code_predictor_probe/${mergedFile}`),
+    fetchBytes(`${base}/codec_embed_q4.onnx`),
   ]);
   const external = { 'model.onnx.data': bytesSource(data) };
   const baseline = await createGraphSession(bytesSource(graph), device, external, kv('present'));
-  const chained = await createGraphSession(bytesSource(probeGraph), device, external, []);
-  log(`sessions ready (baseline inputs ${baseline.inputNames.length}, chained inputs ${chained.inputNames.length})`);
-  // The chained graph without its empty step-0 past inputs, its inputs and output on the GPU, with graph capture.
-  const captured = await createGraphSession(bytesSource(noPastGraph), device, external, ['logits_all'], { graphCapture: true });
-  const gpuUsage = 0x80 | 0x04 | 0x08; // STORAGE | COPY_SRC | COPY_DST
-  const x0Buffer = device.createBuffer({ size: 2 * WIDTH * 4, usage: gpuUsage });
-  const embBuffer = device.createBuffer({ size: (STEPS - 1) * WIDTH * 4, usage: gpuUsage });
-  const x0Tensor = ort.Tensor.fromGpuBuffer(x0Buffer, { dataType: 'float32', dims: [1, 2, WIDTH] });
-  const embTensor = ort.Tensor.fromGpuBuffer(embBuffer, { dataType: 'float32', dims: [1, STEPS - 1, WIDTH] });
-
-  // Fixed pseudo-random rows (the same for both, every frame).
-  let seed = 12345;
-  const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32 - 0.5) * 0.5;
-  const x0 = Float32Array.from({ length: 2 * WIDTH }, random);
-  const emb = Float32Array.from({ length: (STEPS - 1) * WIDTH }, random);
+  const merged = await createGraphSession(bytesSource(mergedGraph), device, external, []);
+  const embedder = await createGraphSession(bytesSource(embedGraph), device, {}, []);
+  if (params.has('placement')) log(`ops left on the CPU (all sessions): ${JSON.stringify(placement)}`);
+  const withPast = merged.inputNames.includes('past_key_values.0.key');
+  log(`sessions ready (merged inputs: ${merged.inputNames.length}, past inputs: ${withPast})`);
   const empty = () => new ort.Tensor('float32', new Float32Array(0), [1, KV_HEADS, 0, HEAD_DIM]);
 
-  /** One frame the way the engine does it today; returns the 15 head slices. */
-  async function frameBaseline(): Promise<Float32Array> {
+  const lookup = async (id: number): Promise<Float32Array> => {
+    const res = await embedder.run({ ids: new ort.Tensor('int64', BigInt64Array.of(BigInt(id)), [1, 1]) });
+    const row = (res.embeds!.data as Float32Array).slice();
+    res.embeds!.dispose();
+    return row;
+  };
+
+  /** The engine's classic way: 15 runs, a lookup between steps, top-k / temperature sampling in JS (Gumbel-max with the given noise). */
+  async function classic(hidden: Float32Array, c0: number, noise: Float32Array): Promise<{ codes: number[]; sum: Float32Array }> {
     let past: Record<string, InstanceType<typeof ort.Tensor>> = Object.fromEntries(kv('past_key_values').map((n) => [n, empty()]));
     let length = 0;
-    const result = new Float32Array(STEPS * GROUP);
+    const e0 = await lookup(c0);
+    const sum = Float32Array.from(e0);
+    let rows: Float32Array[] = [hidden, e0];
+    const codes: number[] = [];
     for (let j = 0; j < STEPS; j++) {
-      const rows = j === 0 ? x0 : emb.subarray((j - 1) * WIDTH, j * WIDTH);
-      const n = j === 0 ? 2 : 1;
-      const feeds = {
-        inputs_embeds: new ort.Tensor('float32', Float32Array.from(rows), [1, n, WIDTH]),
+      const n = rows.length;
+      const embeds = new Float32Array(n * WIDTH);
+      rows.forEach((r, i) => embeds.set(r, i * WIDTH));
+      const res = await baseline.run({
+        inputs_embeds: new ort.Tensor('float32', embeds, [1, n, WIDTH]),
         attention_mask: new ort.Tensor('int64', new BigInt64Array(length + n).fill(1n), [1, length + n]),
         ...past,
-      };
-      const res = await baseline.run(feeds);
+      });
       for (const t of Object.values(past)) t.dispose();
       past = Object.fromEntries(kv('present').map((name, i) => [kv('past_key_values')[i]!, res[name]!]));
       length += n;
       const logits = res.logits!.data as Float32Array;
-      const row = logits.subarray(logits.length - 15 * GROUP - 0, logits.length); // last position's 30720
-      result.set(row.subarray(j * GROUP, (j + 1) * GROUP), j * GROUP);
-      void (res.hidden_states!.data as Float32Array); // the engine reads it back too
+      const head = logits.subarray(logits.length - 15 * GROUP + j * GROUP, logits.length - 15 * GROUP + (j + 1) * GROUP);
+      void (res.hidden_states!.data as Float32Array);
       res.logits!.dispose();
       res.hidden_states!.dispose();
+      // Top-k as the graph does it: the logits at or above the k-th largest, Gumbel noise per token.
+      const kth = [...head].sort((a, b) => b - a)[TOPK - 1]!;
+      let best = -Infinity;
+      let pick = 0;
+      for (let token = 0; token < GROUP; token++) {
+        if (head[token]! < kth) continue;
+        const score = head[token]! / TEMPERATURE - Math.log(-Math.log(noise[j * GROUP + token]!));
+        if (score > best) {
+          best = score;
+          pick = token;
+        }
+      }
+      codes.push(pick);
+      const row = await lookup(VOCAB + j * GROUP + pick);
+      for (let i = 0; i < WIDTH; i++) sum[i]! += row[i]!;
+      rows = [row];
     }
     for (const t of Object.values(past)) t.dispose();
-    return result;
+    return { codes, sum };
   }
 
-  async function frameChained(): Promise<Float32Array> {
+  async function mergedFrame(hidden: Float32Array, c0: number, noise: Float32Array): Promise<{ codes: number[]; sum: Float32Array }> {
     const feeds: Record<string, InstanceType<typeof ort.Tensor>> = {
-      x0: new ort.Tensor('float32', x0, [1, 2, WIDTH]),
-      emb: new ort.Tensor('float32', emb, [1, STEPS - 1, WIDTH]),
-      ...Object.fromEntries(kv('past_key_values').map((n) => [n, empty()])),
+      hidden: new ort.Tensor('float32', hidden, [1, 1, WIDTH]),
+      c0: new ort.Tensor('int64', BigInt64Array.of(BigInt(c0)), [1, 1]),
+      gumbel: new ort.Tensor('float32', gumbelOf(noise), [STEPS, 1, GROUP]),
     };
-    const res = await chained.run(feeds);
-    const logits = (res.logits_all!.data as Float32Array).slice();
-    res.logits_all!.dispose();
-    return logits;
+    if (withPast) for (const n of kv('past_key_values')) feeds[n] = empty();
+    const res = await merged.run(feeds);
+    const codes = Array.from(res.codes!.data as Float32Array, Math.round);
+    const sum = (res.embed_sum!.data as Float32Array).slice();
+    res.codes!.dispose();
+    res.embed_sum!.dispose();
+    return { codes, sum };
   }
 
-  async function frameCaptured(): Promise<Float32Array> {
-    device.queue.writeBuffer(x0Buffer, 0, x0);
-    device.queue.writeBuffer(embBuffer, 0, emb);
-    const res = await captured.run({ x0: x0Tensor, emb: embTensor });
-    const logits = ((await res.logits_all!.getData()) as Float32Array).slice();
-    return logits;
-  }
+  const trial = () => ({
+    hidden: Float32Array.from({ length: WIDTH }, () => (random() - 0.5) * 2),
+    c0: Math.floor(random() * 2048),
+    noise: Float32Array.from({ length: STEPS * GROUP }, () => 1e-6 + random() * (1 - 2e-6)),
+  });
 
-  // Correctness first, then timing (warm-up frames included).
-  const a = await frameBaseline();
-  const b = await frameChained();
-  let maxDiff = 0;
-  let maxAbs = 0;
-  for (let i = 0; i < a.length; i++) {
-    maxDiff = Math.max(maxDiff, Math.abs(a[i]! - b[i]!));
-    maxAbs = Math.max(maxAbs, Math.abs(a[i]!));
-  }
-  log(`logits agree: max |diff| ${maxDiff.toExponential(2)} (max |logit| ${maxAbs.toFixed(2)})`);
-  let captureOk = true;
-  try {
-    const c = await frameCaptured();
-    let d = 0;
-    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i]! - c[i]!));
-    log(`captured graph agrees: max |diff| ${d.toExponential(2)}`);
-    await frameCaptured();
-  } catch (err) {
-    captureOk = false;
-    log(`graph capture failed: ${err instanceof Error ? err.message.slice(200, 900) : String(err)}`);
-  }
-  for (let i = 0; i < 4; i++) {
-    await frameBaseline();
-    await frameChained();
-  }
-  const times: { baseline: number[]; chained: number[]; captured: number[] } = { baseline: [], chained: [], captured: [] };
-  for (let i = 0; i < frames; i++) {
-    let t = performance.now();
-    await frameBaseline();
-    times.baseline.push(performance.now() - t);
-    t = performance.now();
-    await frameChained();
-    times.chained.push(performance.now() - t);
-    if (captureOk) {
-      t = performance.now();
-      await frameCaptured();
-      times.captured.push(performance.now() - t);
+  // Correctness: the same codes and the same embedding sum.
+  let mismatches = 0;
+  let maxSumDiff = 0;
+  const trials = 8;
+  for (let t = 0; t < trials; t++) {
+    const { hidden, c0, noise } = trial();
+    const a = await classic(hidden, c0, noise);
+    const b = await mergedFrame(hidden, c0, noise);
+    const same = a.codes.every((c, i) => c === b.codes[i]);
+    if (!same) {
+      mismatches++;
+      log(`trial ${t}: codes differ\n  classic ${a.codes.join(',')}\n  merged  ${b.codes.join(',')}`);
     }
+    for (let i = 0; i < WIDTH; i++) maxSumDiff = Math.max(maxSumDiff, Math.abs(a.sum[i]! - b.sum[i]!));
+  }
+  log(`${trials} trials: ${trials - mismatches} with identical codes; max |sum difference| ${maxSumDiff.toExponential(2)}`);
+
+  // Timing.
+  for (let i = 0; i < 3; i++) {
+    const { hidden, c0, noise } = trial();
+    await classic(hidden, c0, noise);
+    await mergedFrame(hidden, c0, noise);
+  }
+  const times = { classic: [] as number[], merged: [] as number[] };
+  for (let i = 0; i < frames; i++) {
+    const { hidden, c0, noise } = trial();
+    let t = performance.now();
+    await classic(hidden, c0, noise);
+    times.classic.push(performance.now() - t);
+    t = performance.now();
+    await mergedFrame(hidden, c0, noise);
+    times.merged.push(performance.now() - t);
   }
   const summary = {
-    baselineMedianMs: +median(times.baseline).toFixed(1),
-    chainedMedianMs: +median(times.chained).toFixed(1),
-    baselineMinMs: +Math.min(...times.baseline).toFixed(1),
-    chainedMinMs: +Math.min(...times.chained).toFixed(1),
+    classicMedianMs: +median(times.classic).toFixed(1),
+    mergedMedianMs: +median(times.merged).toFixed(1),
+    classicBestMs: +Math.min(...times.classic).toFixed(1),
+    mergedBestMs: +Math.min(...times.merged).toFixed(1),
   };
-  state.results = { ...summary, maxDiff, maxAbs, frames, capturedMedianMs: captureOk ? +median(times.captured).toFixed(1) : null };
-  if (captureOk) log(`captured graph (1 replay): median ${median(times.captured).toFixed(1)} ms, best ${Math.min(...times.captured).toFixed(1)} ms`);
-  log(`per frame, median of ${frames}: baseline (15 runs) ${summary.baselineMedianMs} ms, chained (1 run) ${summary.chainedMedianMs} ms; best ${summary.baselineMinMs} vs ${summary.chainedMinMs} ms`);
+  state.results = { ...summary, trials, mismatches, maxSumDiff };
+  log(`per frame, median of ${frames}: classic (15 runs + 15 lookups + JS sampling) ${summary.classicMedianMs} ms, merged (1 run) ${summary.mergedMedianMs} ms; best ${summary.classicBestMs} vs ${summary.mergedBestMs} ms`);
 }
 
 run()

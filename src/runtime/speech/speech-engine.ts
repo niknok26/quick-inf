@@ -733,7 +733,11 @@ export class SpeechEngine {
     const tc = cfg.talker_config;
     const [vocab, cpVocab, groups, eos] = [tc.vocab_size, tc.code_predictor_config.vocab_size, tc.num_code_groups, tc.codec_eos_token_id];
     const session = (role: string) => loaded.sessions.get(role)!;
-    const [talker, cp, textEmbed, codecEmbed, decoder] = [session('talker'), session('codePredictor'), session('textEmbed'), session('codecEmbed'), session('decoder')];
+    const [talker, textEmbed, codecEmbed, decoder] = [session('talker'), session('textEmbed'), session('codecEmbed'), session('decoder')];
+    // The code predictor: one graph that makes a whole frame (cpFrame), or the builder graph run step by step.
+    const cpFrame = pipeline.cpFrame ? session('cpFrame') : null;
+    const cp = pipeline.codePredictor ? session('codePredictor') : null;
+    if (!cpFrame && !cp) throw new RuntimeError('load-failed', 'The model has no code predictor.');
     // The talker's width (1024 for 0.6B, 2048 for 1.7B); the code predictor's is 1024 in both, its inputs projected
     // for 1.7B (cp_project, and codec_embed's cp_embeds).
     const width = tc.hidden_size;
@@ -853,28 +857,47 @@ export class SpeechEngine {
         const c0 = sampleTopK(logits);
         if (c0 === eos) break;
         const frame = [c0];
-        // The code predictor computes in float32 (its float16 build overflows).
-        const cpLm = await named('cp setup', async () => builderDecoder(cp, { layers: QWEN_CP_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width: QWEN_CP_WIDTH, float32: true }));
-        try {
-          let h = hidden;
-          if (cpProject) {
-            const out = await named('cpProject', () => cpProject.run({ hidden: new ort.Tensor('float32', hidden, [1, 1, width]) }));
-            h = (out.cp_hidden!.data as Float32Array).slice();
-            out.cp_hidden!.dispose();
+        // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).
+        const textRow = trailing[frames.length + 1] ?? padE!;
+        let sum: Float32Array;
+        if (cpFrame) {
+          // One run: codebooks 1..15 sampled inside the graph (top-k 50, temperature 0.9, from the Gumbel noise given), and
+          // the sum of the frame's 16 code embeddings.
+          const out = await named('code predictor', () =>
+            cpFrame.run({
+              hidden: new ort.Tensor('float32', hidden, [1, 1, width]),
+              c0: new ort.Tensor('int64', BigInt64Array.of(BigInt(c0)), [1, 1]),
+              gumbel: new ort.Tensor('float32', gumbelNoise((groups - 1) * cpVocab, 0.9), [groups - 1, 1, cpVocab]),
+            }),
+          );
+          for (const code of out.codes!.data as Float32Array) frame.push(Math.round(code));
+          const embedSum = (out.embed_sum!.data as Float32Array).slice();
+          out.codes!.dispose();
+          out.embed_sum!.dispose();
+          sum = add(embedSum, textRow);
+        } else {
+          // The code predictor computes in float32 (its float16 build overflows).
+          const cpLm = await named('cp setup', async () => builderDecoder(cp!, { layers: QWEN_CP_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width: QWEN_CP_WIDTH, float32: true }));
+          try {
+            let h = hidden;
+            if (cpProject) {
+              const out = await named('cpProject', () => cpProject.run({ hidden: new ort.Tensor('float32', hidden, [1, 1, width]) }));
+              h = (out.cp_hidden!.data as Float32Array).slice();
+              out.cp_hidden!.dispose();
+            }
+            let x = [h, (await named('cp embed lookup', () => cpEmbed([c0])))[0]!];
+            for (let j = 0; j < groups - 1; j++) {
+              const { logits: cpLogits } = await named('code predictor', () => cpLm.run(x));
+              const c = sampleTopK(cpLogits.subarray(j * cpVocab, (j + 1) * cpVocab));
+              frame.push(c);
+              if (j < groups - 2) x = await named('cp embed lookup', () => cpEmbed([vocab + j * cpVocab + c]));
+            }
+          } finally {
+            await named('cp setup', async () => cpLm.dispose());
           }
-          let x = [h, (await named('cp embed lookup', () => cpEmbed([c0])))[0]!];
-          for (let j = 0; j < groups - 1; j++) {
-            const { logits: cpLogits } = await named('code predictor', () => cpLm.run(x));
-            const c = sampleTopK(cpLogits.subarray(j * cpVocab, (j + 1) * cpVocab));
-            frame.push(c);
-            if (j < groups - 2) x = await named('cp embed lookup', () => cpEmbed([vocab + j * cpVocab + c]));
-          }
-        } finally {
-          await named('cp setup', async () => cpLm.dispose());
+          sum = add(...(await named('codec embed sum', () => embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c))))), textRow);
         }
         frames.push(frame);
-        // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).
-        const sum = add(...(await named('codec embed sum', () => embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c))))), trailing[frames.length] ?? padE!);
         ({ logits, hidden } = await named('talker step', () => talkerLm.run([sum])));
       }
     } finally {
@@ -2159,6 +2182,13 @@ function topIndices(values: Float32Array, k: number): number[] {
 }
 
 /** Sampling at temperature 0.9 from the 50 most likely (the checkpoints' generation_config). */
+/** Sampling noise for a graph that samples inside itself: `temperature` times Gumbel(0,1), from uniform noise. */
+function gumbelNoise(count: number, temperature: number): Float32Array {
+  const noise = new Float32Array(count);
+  for (let i = 0; i < count; i++) noise[i] = -temperature * Math.log(-Math.log(1e-6 + Math.random() * (1 - 2e-6)));
+  return noise;
+}
+
 function sampleTopK(logits: Float32Array, temperature = 0.9, k = 50): number {
   const order = topIndices(logits, k);
   const max = logits[order[0]!]! / temperature;

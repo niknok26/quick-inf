@@ -199,7 +199,14 @@ export type SpeechPipeline =
       /** The checkpoint's config.json: special token ids, codec ids, speakers and languages. */
       config: ArtifactFile;
       talker: SpeechGraph;
-      codePredictor: SpeechGraph;
+      /** The 5-layer code predictor as the builder's graph, run step by step (15 runs and 14 lookups per frame). */
+      codePredictor?: SpeechGraph;
+      /**
+       * The same predictor as ONE graph that makes a frame: chained 15 times with the codec-embedding lookups and the
+       * top-k / temperature sampling inside (tools/export/merge_qwen3_tts_cp.py). In: hidden [1,1,H], c0 [1,1] int64,
+       * gumbel [15,1,2048]; out: codes [1,15] (float), embed_sum [1,1,H]. 0.6B only (no projection to the predictor's width).
+       */
+      cpFrame?: SpeechGraph;
       textEmbed: SpeechGraph;
       /** Codec embeddings: `embeds` for the talker, and (1.7B) `cp_embeds`, the same rows projected for the code predictor. */
       codecEmbed: SpeechGraph;
@@ -1090,8 +1097,8 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
         graph: file('talker/model.onnx', 232783, 'd890b911ee748b371fab8aa04444e35cd37ad6e62374cfe67010020b55db3044'),
         data: [file('talker/model.onnx.data', 516030464, '353854c86951f978ed3be2d1a78104b2f77d8f32481dd2ab964c8fdf6fdf3b43')],
       },
-      codePredictor: {
-        graph: file('code_predictor/model.onnx', 49244, 'b8a4deebbc26a2a74023ae3aabc1a3c132ee318968bd2d4dcd51a75d70a05633'),
+      cpFrame: {
+        graph: file('code_predictor/frame.onnx', 22021784, '37249b72cbfdf4e479a379e71a3fa09aee34d2802bdb9b03e6f0b1d45055a5c3'),
         data: [file('code_predictor/model.onnx.data', 104137728, 'a063b2ee0f42e52058f65bba8dfbaaf65d3f2ca71b7bc0f60a7baed5e363ef02')],
       },
       textEmbed: { graph: file('text_embed_q4.onnx', 97239399, '0d69cc0dfb8868a0c6df24f96539a04da3953eff527e82333b9a68844eafe4a5') },
@@ -1295,7 +1302,8 @@ export function speechModelFiles(model: SpeechModelSpec): ArtifactFile[] {
   };
   walk(model.pipeline);
   walk(model.voices);
-  return [...new Set(files)].sort((a, b) => a.sizeBytes - b.sizeBytes);
+  // Two graphs may share a data file (the same path): listed once.
+  return [...new Map(files.map((f) => [f.path, f])).values()].sort((a, b) => a.sizeBytes - b.sizeBytes);
 }
 
 export function speechModelBytes(model: SpeechModelSpec): number {
