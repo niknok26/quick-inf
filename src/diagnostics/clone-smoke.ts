@@ -10,7 +10,7 @@ import { getRuntimeClient } from '../runtime/client';
 import { encodeWav } from '../ui/workspaces/speech/wav';
 
 const params = new URLSearchParams(location.search);
-const MODEL_ID = 'qwen3-tts-1.7b-base';
+const MODEL_ID = params.get('model') ?? 'qwen3-tts-1.7b-base';
 const SAMPLE_RATE = 24000;
 const refName = params.get('ref') ?? 'ref20';
 const text = params.get('text') ?? 'The quick brown fox jumps over the lazy dog near the riverbank.';
