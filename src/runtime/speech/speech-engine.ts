@@ -48,6 +48,8 @@ import { chunkText, prepareText, textIds } from './supertonic-text';
 export interface SpeechGenerationRequest {
   text: string;
   settings: SpeechSettings;
+  /** Voice cloning (Qwen3-TTS Base): a clip of the voice and what is said in it, at the model's sample rate. */
+  reference?: { audio: Float32Array; text: string };
 }
 
 export interface SpeechGenerationProgress {
@@ -733,6 +735,15 @@ export class SpeechEngine {
     // for 1.7B (cp_project, and codec_embed's cp_embeds).
     const width = tc.hidden_size;
     const cpProject = pipeline.cpProject ? session('cpProject') : null;
+    /** The codec and speaker encoders take [1, samples] at a fixed rate, in the input's declared length. */
+    const inputRate = (role: string) => {
+      const meta = session(role).inputMetadata.find((m) => m.name === 'audio');
+      const dims = meta && 'shape' in meta ? meta.shape : undefined;
+      const n = dims && typeof dims[1] === 'number' ? dims[1] : 0;
+      return n >= 8000 && n <= 96000 ? n : 24000;
+    };
+    const encoderRate = pipeline.encoder ? inputRate('encoder') : 24000;
+    const speakerRate = pipeline.speaker ? inputRate('speaker') : 24000;
     /** Rows of a lookup graph's output (`embeds`, or `cp_embeds` for the code predictor when there is one). */
     const lookup = async (graph: InferenceSession, ids: number[], output = 'embeds') => {
       const out = await graph.run({ ids: new ort.Tensor('int64', BigInt64Array.from(ids, BigInt), [1, ids.length]) });
@@ -757,21 +768,76 @@ export class SpeechEngine {
     codecIds.push(tc.codec_pad_id, tc.codec_bos_id);
     const codec = await embed(codecEmbed, codecIds);
     const rows: Float32Array[] = [];
-    if (request.settings.instruct?.trim()) rows.push(...(await embed(textEmbed, qwenInstruct(tokenizer, request.settings.instruct.trim()))));
-    rows.push(...(await embed(textEmbed, role)));
-    codec.slice(0, -1).forEach((c, i) => rows.push(add(i < codec.length - 2 ? padE! : bosE!, c)));
-    const bodyE = await embed(textEmbed, body);
-    const padCodes = await embed(codecEmbed, Array<number>(body.length + 1).fill(tc.codec_pad_id));
-    [...bodyE, eosE!].forEach((t, i) => rows.push(add(t, padCodes[i]!)));
-    rows.push(add(padE!, (await embed(codecEmbed, [tc.codec_bos_id]))[0]!));
+    /** Runs one step of the pipeline, naming it in the error (ONNX Runtime's own message does not say which graph failed). */
+    const named = async <T>(graph: string, run: () => Promise<T>): Promise<T> => {
+      try {
+        return await run();
+      } catch (err) {
+        throw new RuntimeError('generation-failed', `${graph}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    // Cloning (streaming ICL): the text's rows past the reference clip's frames, fed to the talker one per frame.
+    let trailing: Float32Array[] = [];
+    // Base (voice cloning): a reference clip stands in for the voice — its codes and x-vector take the place of the
+    // speaker's, and its transcript runs beside them aligned with the text (qwen_tts's generate_icl_prompt).
+    const clone = pipeline.encoder && pipeline.speaker && request.reference?.audio.length ? request.reference : undefined;
+    let maxFrames = Math.min(QWEN_MAX_FRAMES, 25 + 9 * body.length);
+    if (clone) {
+      const refText = clone.text.trim();
+      if (!refText) throw new RuntimeError('generation-failed', 'Voice cloning needs the reference clip\u2019s text.');
+      maxFrames = Math.min(QWEN_MAX_FRAMES, 25 + 9 * (refText.length + body.length));
+      const resample = (audio: Float32Array, from: number, to: number) => {
+        if (from === to) return audio;
+        const out = new Float32Array(Math.round((audio.length * to) / from));
+        out.forEach((_, i) => {
+          const at = (i * from) / to;
+          const lo = Math.floor(at);
+          out[i] = audio[lo]! + (audio[Math.min(lo + 1, audio.length - 1)]! - audio[lo]!) * (at - lo);
+        });
+        return out;
+      };
+      // The caller's clip is at the model's rate; a graph that wants another gets it resampled.
+      const clip = clone.audio;
+      const spkLen = Math.round((clip.length * speakerRate) / 24000);
+      const spkOut = await named('speaker', () => session('speaker').run({ audio: new ort.Tensor('float32', resample(clip, 24000, speakerRate), [1, spkLen]) }));
+      const xvecRow = ((spkOut.xvector ?? Object.values(spkOut)[0]!) as Tensor).data as Float32Array;
+      for (const v of Object.values(spkOut)) v.dispose();
+      const refFrames = Math.ceil((clip.length * encoderRate) / 24000 / QWEN_FRAME_SAMPLES);
+      const encPad = refFrames * QWEN_FRAME_SAMPLES;
+      const padded = new Float32Array(encPad);
+      padded.set(resample(clip, 24000, encoderRate));
+      const encOut = await named('encoder', () => session('encoder').run({ audio: new ort.Tensor('float32', padded, [1, encPad]) }));
+      const codesT = (encOut.codes ?? Object.values(encOut)[0]!) as Tensor;
+      const raw = Array.from(codesT.data as BigInt64Array, Number);
+      const refCodes: number[][] = Array.from({ length: groups }, (_, g) => raw.slice(g * refFrames, (g + 1) * refFrames));
+      codesT.dispose();
+      rows.push(...(await embed(textEmbed, role)));
+      // The talker's own prefix: the think tokens and language, then the x-vector where a speaker id's row would go.
+      const prefix = await embed(codecEmbed, [tc.codec_think_id, tc.codec_think_bos_id, langId, tc.codec_think_eos_id, tc.codec_pad_id]);
+      // qwen_tts: tts_pad over every row up to the x-vector's, tts_bos over the codec pad that follows it.
+      prefix.slice(0, -1).forEach((c) => rows.push(add(padE!, c)));
+      rows.push(add(padE!, xvecRow), add(bosE!, prefix[prefix.length - 1]!));
+      // The reference's transcript's tokens, then the target text's — qwen_tts's generate_icl_prompt's text run.
+      const iclTokens = qwenPrompt(tokenizer, refText).body.concat(body);
+      const icl = await named('icl prompt', () => this.qwenIcl(loaded, pipeline, iclTokens, refCodes, eosE!));
+      rows.push(...icl.rows);
+      trailing = icl.trailing;
+    } else {
+      if (request.settings.instruct?.trim()) rows.push(...(await embed(textEmbed, qwenInstruct(tokenizer, request.settings.instruct.trim()))));
+      rows.push(...(await embed(textEmbed, role)));
+      codec.slice(0, -1).forEach((c, i) => rows.push(add(i < codec.length - 2 ? padE! : bosE!, c)));
+      const bodyE = await embed(textEmbed, body);
+      const padCodes = await embed(codecEmbed, Array<number>(body.length + 1).fill(tc.codec_pad_id));
+      [...bodyE, eosE!].forEach((t, i) => rows.push(add(t, padCodes[i]!)));
+      rows.push(add(padE!, (await embed(codecEmbed, [tc.codec_bos_id]))[0]!));
+    }
 
     const talkerLm = builderDecoder(talker, { layers: QWEN_TALKER_LAYERS, kvHeads: QWEN_KV_HEADS, headDim: QWEN_HEAD_DIM, width, float32: pipeline.talkerFloat32 });
     const frames: number[][] = [];
     try {
-      let { logits, hidden } = await talkerLm.run(rows);
+      let { logits, hidden } = await named('talker prefill', () => talkerLm.run(rows));
       // Sampling occasionally never picks the stop code: frames are capped by the text's length at about twice normal
       // speech (4.5 frames per token on average, up to 8 on short sentences), within the checkpoints' max_new_tokens.
-      const maxFrames = Math.min(QWEN_MAX_FRAMES, 25 + 9 * body.length);
       for (let step = 0; step < maxFrames; step++) {
         this.throwIfCancelled();
         const seen = new Set(frames.map((f) => f[0]!));
@@ -786,13 +852,13 @@ export class SpeechEngine {
         try {
           let h = hidden;
           if (cpProject) {
-            const out = await cpProject.run({ hidden: new ort.Tensor('float32', hidden, [1, 1, width]) });
+            const out = await named('cpProject', () => cpProject.run({ hidden: new ort.Tensor('float32', hidden, [1, 1, width]) }));
             h = (out.cp_hidden!.data as Float32Array).slice();
             out.cp_hidden!.dispose();
           }
           let x = [h, (await cpEmbed([c0]))[0]!];
           for (let j = 0; j < groups - 1; j++) {
-            const { logits: cpLogits } = await cpLm.run(x);
+            const { logits: cpLogits } = await named('code predictor', () => cpLm.run(x));
             const c = sampleTopK(cpLogits.subarray(j * cpVocab, (j + 1) * cpVocab));
             frame.push(c);
             if (j < groups - 2) x = await cpEmbed([vocab + j * cpVocab + c]);
@@ -801,8 +867,9 @@ export class SpeechEngine {
           cpLm.dispose();
         }
         frames.push(frame);
-        const sum = add(...(await embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c)))), padE!);
-        ({ logits, hidden } = await talkerLm.run([sum]));
+        // Cloning: the text keeps running beside the frames — one of its rows per frame (tts_pad once it's done).
+        const sum = add(...(await embed(codecEmbed, frame.map((c, g) => (g === 0 ? c : vocab + (g - 1) * cpVocab + c)))), trailing[frames.length] ?? padE!);
+        ({ logits, hidden } = await named('talker step', () => talkerLm.run([sum])));
       }
     } finally {
       talkerLm.dispose();
@@ -1279,6 +1346,64 @@ export class SpeechEngine {
       emit(new Float32Array(audio.data as Float32Array), c + 1, chunks.length);
       audio.dispose();
     }
+  }
+
+  /**
+   * Qwen3-TTS Base: the in-context-learning block of a cloning prompt (qwen_tts's generate_icl_prompt). The reference
+   * clip's codec frames and the text tokens (the reference's transcript, then the target text) run side by side: at
+   * each position the text embedding and the frame's sum of code embeddings are added; whichever list is longer keeps
+   * going with tts_pad / codec_pad rows; then codec BOS. `tokens` are already concatenated, without the template's
+   * role tokens or the trailing im_end + newline.
+   */
+  /**
+   * Qwen3-TTS Base: the in-context-learning part of a cloning prompt (qwen_tts's generate_icl_prompt, streaming
+   * mode): the reference clip's transcript and the target text run beside the clip's codec frames — frame t's row is
+   * the sum of its 16 code embeddings plus the text embedding opposite it (tts_pad where there is none; a text row
+   * past the last frame takes a codec-pad row). The text rows beyond the clip's frames are not prefilled: they come
+   * back as `trailing`, fed to the talker one per generated frame.
+   */
+  private async qwenIcl(
+    loaded: Loaded,
+    pipeline: Extract<SpeechPipeline, { kind: 'qwen3-tts' }>,
+    tokens: number[],
+    refCodes: number[][],
+    /** tts_eos's embedding: the text's end token, riding along at the end of its run. */
+    eosE: Float32Array,
+  ): Promise<{ rows: Float32Array[]; trailing: Float32Array[] }> {
+    const ort = getOrt();
+    const cfg = json(loaded, pipeline.config) as QwenConfig;
+    const tc = cfg.talker_config;
+    const [vocab, cpVocab] = [tc.vocab_size, tc.code_predictor_config.vocab_size];
+    const textEmbed = loaded.sessions.get('textEmbed')!;
+    const codecEmbed = loaded.sessions.get('codecEmbed')!;
+    const lookup = async (graph: InferenceSession, ids: number[]) => {
+      const out = await graph.run({ ids: new ort.Tensor('int64', BigInt64Array.from(ids, BigInt), [1, ids.length]) });
+      const t = out.embeds!;
+      const n = t.size / ids.length;
+      const rows = Array.from({ length: ids.length }, (_, i) => (t.data as Float32Array).slice(i * n, (i + 1) * n));
+      t.dispose();
+      return rows;
+    };
+    const padE = (await lookup(textEmbed, [cfg.tts_pad_token_id]))[0]!;
+    const bosRow = (await lookup(codecEmbed, [tc.codec_bos_id]))[0]!;
+    const frames = refCodes[0]!.length;
+    // The text's run, with its end token appended; the frames carry codec BOS in front of them.
+    const textRows = [...(await lookup(textEmbed, tokens)), eosE];
+    const codeRows: Float32Array[] = [];
+    for (let t = 0; t < frames; t++) {
+      this.throwIfCancelled();
+      const codes = await lookup(codecEmbed, refCodes.map((g, gi) => (gi === 0 ? g[t]! : vocab + (gi - 1) * cpVocab + g[t]!)));
+      codeRows.push(add(...codes));
+    }
+    // The clip's frames beside codec BOS; the text run overlaps them position by position. Where the text is longer
+    // than the frames, its leftovers ride along as `trailing`; where it is shorter, pad rows stand in and everything
+    // but the last frame's row prefills (qwen_tts's generate_icl_prompt).
+    const codes: Float32Array[] = [bosRow, ...codeRows];
+    if (textRows.length > codes.length) {
+      return { rows: codes.map((c, t) => add(textRows[t]!, c)), trailing: textRows.slice(codes.length) };
+    }
+    const rows = Array.from({ length: codes.length }, (_, t) => add(t < textRows.length ? textRows[t]! : padE, codes[t]!));
+    return { rows: rows.slice(1), trailing: [rows[0]!, padE] }; // the first frame's row feeds the first decode step
   }
 
   private async qwenDecode(decoder: InferenceSession, frames: number[][]): Promise<Float32Array> {
@@ -1991,7 +2116,7 @@ const QWEN_FRAME_SAMPLES = 1920;
 const QWEN_DECODE_CHUNK = 300;
 const QWEN_DECODE_CONTEXT = 25;
 
-interface QwenConfig {
+export interface QwenConfig {
   tts_bos_token_id: number;
   tts_eos_token_id: number;
   tts_pad_token_id: number;

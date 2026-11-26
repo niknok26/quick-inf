@@ -208,6 +208,10 @@ export type SpeechPipeline =
       /** The talker computes in float32 (float32 inputs and cache; float16 overflowed into babble now and then). */
       talkerFloat32?: boolean;
       decoder: SpeechGraph;
+      /** Base (voice cloning): the codec's encoder — 24 kHz audio [1, samples] → codes [1, 16, frames]. */
+      encoder?: SpeechGraph;
+      /** Base: the speaker encoder — 24 kHz audio [1, samples] → the x-vector row [1, hidden_size]. */
+      speaker?: SpeechGraph;
     }
   | {
       /**
@@ -948,7 +952,7 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
         data: [file('talker/model.onnx.data', 301203456, '026537338baf696232457b7e624a9c8794f16caa358a5a8cc88d92f61a091e3c')],
       },
       codePredictor: {
-        graph: file('code_predictor/model.onnx', 56354, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
+        graph: file('code_predictor/model.onnx', 55308, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
         data: [file('code_predictor/model.onnx.data', 157483008, '35284527836a5c52836f58d4fe0e140eb3a9a442cbeed44cd8d494c5eb056bf8')],
       },
       textEmbed: { graph: file('text_embed_q4.onnx', 97239399, '6a0d7fa5c29e1a60ccce507a92827ddb432ddf49dfea8c166a886c5c7d138df9') },
@@ -980,7 +984,7 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
         data: [file('talker/model.onnx.data', 924188672, '9f18ddd03c6e1b4a35804da668d63444973e835d3842ef684b2f124f0ff6a0cb')],
       },
       codePredictor: {
-        graph: file('code_predictor/model.onnx', 56354, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
+        graph: file('code_predictor/model.onnx', 55308, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
         data: [file('code_predictor/model.onnx.data', 157483008, '33fad8842b38c691750ab466379db80324fb685ada4b250bc96b975630d949bb')],
       },
       textEmbed: { graph: file('text_embed_q4.onnx', 194478439, 'd414d3c004a263adde99467f86bc1870a3f0c0c386152babdb3809c586cde296') },
@@ -1013,7 +1017,7 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
         data: [file('talker/model.onnx.data', 924188672, '61a2d3862a3a666242d40e24e82d371a155e666454054fd7617cec6d1cbc9f71')],
       },
       codePredictor: {
-        graph: file('code_predictor/model.onnx', 56354, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
+        graph: file('code_predictor/model.onnx', 55308, '6ac4c6c4cc831ff024015537d1ae16c0d3e72b17e4ef512c4c5924a26a7b7a4c'),
         data: [file('code_predictor/model.onnx.data', 157483008, '78e4de197ec51ab9d5620ca580d6f3f39515041468a57da4a4f89c22b6b059ed')],
       },
       textEmbed: { graph: file('text_embed_q4.onnx', 194478439, '27c9c17ec13757cbc918578f508d1547b30da082de98c2e248fa8f4b2f935b34') },
@@ -1028,6 +1032,42 @@ const ALL_SPEECH_MODELS: readonly SpeechModelSpec[] = [
       language: 'english',
       instruct: 'A clear, calm adult male voice with a neutral American accent, speaking at a moderate pace.',
     },
+  },
+  {
+    id: 'qwen3-tts-1.7b-base',
+    name: 'Qwen3-TTS 1.7B Base (clone)',
+    publisher: 'Qwen',
+    parameters: '1.7B',
+    parameterCount: 1_700_000_000,
+    summary: 'Qwen3-TTS voice cloning: a reference clip of the voice in place of a built-in speaker.',
+    license: APACHE_2,
+    source: { host: 'huggingface', repo: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base', revision: 'local' },
+    precision: 'q4',
+    sampleRate: 24000,
+    voices: [],
+    languages: QWEN_LANGUAGES,
+    pipeline: {
+      kind: 'qwen3-tts',
+      tokenizer: file('tokenizer.json', 11423986, '09267689b8362020b9763b65dd5be7e086b31e28d72e02837a9e781de9a91bc7'),
+      config: file('config.json', 4036, '30d2dc0537f208540b9309d2365f469eed87e3948d84aeefc4746fdfef12ef2c'),
+      talker: {
+        graph: file('talker/model.onnx', 261336, 'aae02e10a4004d036b39ade6539b0365f00d4965ffc13f8d28697de8b8d56168'),
+        data: [file('talker/model.onnx.data', 924127232, 'e06664198896b1b1f8a41f465db560ac78f35523af0735479095f42f3aa5ee68')],
+      },
+      codePredictor: {
+        graph: file('code_predictor/model.onnx', 49244, 'b8a4deebbc26a2a74023ae3aabc1a3c132ee318968bd2d4dcd51a75d70a05633'),
+        data: [file('code_predictor/model.onnx.data', 104137728, '5ada7b3c4fdf4f0c5d5c9a9634328ca908d3f7bb35f040dcd103b80eace89572')],
+      },
+      textEmbed: { graph: file('text_embed_q4.onnx', 194478439, 'ca94cd4dc81f89092fc37a69ba9566cdc88696e8afd8dd4a77c80dfcc1c28506') },
+      codecEmbed: { graph: file('codec_embed_q4.onnx', 64881305, '42d5a29002ebb9afa197de2526871c262de67a308ef4e136005562e6b4359616') },
+      cpProject: { graph: file('cp_project_q4.onnx', 1315139, '45f82efcf8de526969dfb7351e6603469efdf2d56038c2a8fa642c5ae3ca1277') },
+      decoder: { graph: file('tok_decoder_q4c8.onnx', 129800340, '1100c403c758e52992fe922f13fae1763a3ef2860d598e0072a5d5590504b4c2') },
+      encoder: { graph: file('tok_encoder_q4.onnx', 95037548, '31f42c9acaf25552718be611d402092944c80b527bc972593b3231cec9829af0') },
+      speaker: { graph: file('speaker.onnx', 52640129, '62db629fbe3753ee18e27bdca9bb402012f5673f8b61f1e66a5b20d30e9be410') },
+      talkerFloat32: true,
+    },
+    defaults: { voice: 'clone', language: 'english' },
+    devOnly: true,
   },
   {
     id: 'csm-1b',
