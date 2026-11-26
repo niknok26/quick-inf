@@ -1,9 +1,10 @@
 // A speech tab: type text, hear it spoken. One clip per session; speaking again replaces it. The whole clip is made
 // first (with progress shown), then saved as a WAV and played, with a player and a download link. Settings (voice,
-// language, speed, steps) come from the model.
+// language, speed, steps) come from the model. For cloning models (Qwen3-TTS Base), reference voices are managed
+// in the settings panel.
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { findSpeechModel, type SpeechModelSpec, type SpeechSettings } from '../../../catalogue/speech-models';
+import { findSpeechModel, isCloningPipeline, type SpeechModelSpec, type SpeechSettings } from '../../../catalogue/speech-models';
 import { sessionStore } from '../../../conversations/session-store';
 import { getRuntimeClient } from '../../../runtime/client';
 import { RuntimeError } from '../../../runtime/contract';
@@ -14,6 +15,8 @@ import { modelRuntimeState, useRuntimeStatus } from '../../runtime/use-runtime';
 import type { WorkspaceProps } from '../registry';
 import { speechStore, useClip, useClipUrl, type Clip } from './speech-store';
 import { encodeWav } from './wav';
+import { useVoices, voiceStore } from './voice-store';
+import { VoicePanel } from './voice-panel';
 
 const TITLE_LENGTH = 48;
 const EXAMPLES = [
@@ -46,15 +49,20 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
   const [settingsOpen, setSettingsOpen] = useState(false);
   const runtime = modelRuntimeState(useRuntimeStatus(), model.id);
   const busy = clip?.status === 'generating';
+  const voices = useVoices();
   if (!spec) return null;
   const ready = runtime === 'ready' || runtime === 'busy';
+  // A cloning model speaks in a saved reference voice: the chosen one, else the first.
+  const cloning = isCloningPipeline(spec.pipeline);
+  const voice = cloning ? (voices.find((v) => v.id === settings.voice) ?? voices[0]) : undefined;
+  const canSpeak = ready && (!cloning || !!voice);
 
   function speak(e?: FormEvent) {
     e?.preventDefault();
     const words = text.trim();
-    if (!words || busy || !spec || !ready) return;
+    if (!words || busy || !canSpeak || !spec) return;
     if (!clip) onRename(words.length > TITLE_LENGTH ? `${words.slice(0, TITLE_LENGTH)}…` : words);
-    startSpeech(session.id, spec, words, settings);
+    startSpeech(session.id, spec, words, voice ? { ...settings, voice: voice.id } : settings, voice && { audio: voice.audio, text: voice.transcript });
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -101,6 +109,8 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
             </div>
           )}
           {settingsOpen && <SettingsPanel spec={spec} settings={settings} onChange={setSettings} />}
+          {cloning && settingsOpen && <VoicePanel voices={voices} selectedId={voice?.id} onSelect={(id) => setSettings({ ...settings, voice: id })} />}
+          {cloning && !voice && <p className="muted">Open Settings and add a reference voice to speak with.</p>}
           <div className="composer__box">
             <textarea
               className="composer__input"
@@ -126,7 +136,7 @@ export function SpeechWorkspace({ model, session, onRename, onBack }: WorkspaceP
                 <StopIcon />
               </button>
             ) : (
-              <button className="composer__send" type="submit" disabled={!text.trim() || !ready} aria-label={started ? 'Speak again' : 'Speak'}>
+              <button className="composer__send" type="submit" disabled={!text.trim() || !canSpeak} aria-label={started ? 'Speak again' : 'Speak'}>
                 <SendIcon />
               </button>
             )}
@@ -196,7 +206,7 @@ function ClipView({ spec, clip, sessionId }: { spec: SpeechModelSpec; clip: Clip
  * Starts speaking with the loaded model: the whole clip is made first (progress shown as it goes), then saved and
  * played. Streaming playback stuttered with the models slower than real time.
  */
-function startSpeech(sessionId: string, spec: SpeechModelSpec, text: string, settings: SpeechSettings): void {
+function startSpeech(sessionId: string, spec: SpeechModelSpec, text: string, settings: SpeechSettings, reference?: { audio: Float32Array; text: string }): void {
   running.get(sessionId)?.();
   const clip: Clip = {
     id: crypto.randomUUID(),
@@ -214,7 +224,7 @@ function startSpeech(sessionId: string, spec: SpeechModelSpec, text: string, set
   };
   const pieces: Float32Array[] = [];
   let samples = 0;
-  const handle = getRuntimeClient().generateSpeech({ text, settings }, (p) => {
+  const handle = getRuntimeClient().generateSpeech({ text, settings, reference }, (p) => {
     pieces.push(p.audio);
     samples += p.audio.length;
     const c = current();
@@ -316,13 +326,19 @@ function SettingsPanel({ spec, settings, onChange }: { spec: SpeechModelSpec; se
 /** Whether the model takes any setting (a choice of voice or language, speed or steps). */
 function hasSettings(spec: SpeechModelSpec): boolean {
   return (
-    spec.voices.length > 1 || !!spec.languages || spec.defaults.instruct !== undefined || spec.defaults.speed !== undefined || spec.defaults.steps !== undefined
+    isCloningPipeline(spec.pipeline) || spec.voices.length > 1 || !!spec.languages || spec.defaults.instruct !== undefined || spec.defaults.speed !== undefined || spec.defaults.steps !== undefined
   );
 }
 
 /** One line describing the settings, e.g. "Female 1 · 1.05× · 8 steps". */
 function summarise(spec: SpeechModelSpec, settings: SpeechSettings): string {
-  const parts = [settings.instruct?.trim() ? 'Described voice' : (spec.voices.find((v) => v.id === settings.voice)?.label ?? settings.voice)];
+  const parts = [
+    isCloningPipeline(spec.pipeline)
+      ? (voiceStore.get(settings.voice)?.name ?? 'Reference voice')
+      : settings.instruct?.trim()
+        ? 'Described voice'
+        : (spec.voices.find((v) => v.id === settings.voice)?.label ?? settings.voice),
+  ];
   if (settings.language) parts.push(spec.languages?.find((l) => l.id === settings.language)?.label ?? settings.language);
   if (settings.speed !== undefined) parts.push(`${settings.speed.toFixed(2)}×`);
   if (settings.steps !== undefined) parts.push(`${settings.steps} steps`);

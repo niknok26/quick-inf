@@ -11,6 +11,7 @@
 //            src/ui/workspaces/image/image-store.ts).
 // Version 6: `speech` — generated speech (WAV blobs) by session id, one per speech tab (see
 //            src/ui/workspaces/speech/speech-store.ts).
+// Version 7: `voices` — saved reference voices for cloning speech models (see src/store/voices.ts).
 
 const DB_NAME = 'quick-inf';
 
@@ -37,9 +38,12 @@ const UPGRADES: ((db: IDBDatabase) => void)[] = [
   (db) => {
     db.createObjectStore('speech', { keyPath: 'sessionId' });
   },
+  (db) => {
+    db.createObjectStore('voices', { keyPath: 'id' });
+  },
 ];
 
-export type StoreName = 'artifacts' | 'sessions' | 'messages' | 'runs' | 'deviceTests' | 'engineState' | 'images' | 'speech';
+export type StoreName = 'artifacts' | 'sessions' | 'messages' | 'runs' | 'deviceTests' | 'engineState' | 'images' | 'speech' | 'voices';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 

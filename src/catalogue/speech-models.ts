@@ -1310,3 +1310,8 @@ export function speechGraphs(pipeline: SpeechPipeline): Record<string, SpeechGra
   }
   return out;
 }
+
+/** True when this pipeline supports voice cloning (Qwen3-TTS Base with encoder + speaker). */
+export function isCloningPipeline(pipeline: SpeechPipeline): boolean {
+  return pipeline.kind === 'qwen3-tts' && 'encoder' in pipeline && 'speaker' in pipeline;
+}
